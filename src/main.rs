@@ -1959,7 +1959,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                             if let Some(room) = rooms_lock.get(&room_id) {
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone())));
+                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             }
@@ -1978,7 +1978,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
 
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone())));
+                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             } else if parsed.msg_type == "cam-toggle" {
@@ -1992,7 +1992,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
 
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone())));
+                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             } else if parsed.msg_type == "screen-toggle" {
@@ -2006,7 +2006,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
 
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone())));
+                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             } else if parsed.msg_type == "signal" {
@@ -2018,7 +2018,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                                             target: None,
                                             data: parsed.data,
                                         }).unwrap();
-                                        let _ = tx.send(Ok(Message::Text(outbound)));
+                                        let _ = tx.send(Ok(Message::Text(outbound.into())));
                                     }
                                 }
                             } else if parsed.msg_type == "identify" {
@@ -2030,7 +2030,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                                             target: None,
                                             data: parsed.data,
                                         }).unwrap();
-                                        let _ = tx.send(Ok(Message::Text(outbound)));
+                                        let _ = tx.send(Ok(Message::Text(outbound.into())));
                                     }
                                 }
                             }
@@ -2056,7 +2056,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
             }).unwrap();
 
             for tx in room.values() {
-                let _ = tx.send(Ok(Message::Text(leave_msg.clone())));
+                let _ = tx.send(Ok(Message::Text(leave_msg.clone().into())));
             }
 
             if room.is_empty() {
