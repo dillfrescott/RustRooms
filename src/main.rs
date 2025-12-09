@@ -64,7 +64,7 @@ const HTML_PAGE: &str = r###"
             width: 100%;
             height: 100%;
             object-fit: contain;
-            background: #000;
+            background: transparent;
         }
 
         .grid-expand {
@@ -1272,7 +1272,7 @@ const HTML_PAGE: &str = r###"
 
                      if (hasActiveVideo) {
                          v.classList.add('active');
-                         v.style.objectFit = 'cover';
+                         v.style.objectFit = 'contain';
                      } else {
                          v.classList.remove('active');
                      }
@@ -1860,6 +1860,30 @@ const HTML_PAGE: &str = r###"
             
             pip.addEventListener('mousedown', onMouseDown);
             pip.addEventListener('touchstart', onTouchStart, { passive: false });
+
+            window.addEventListener('resize', () => {
+                if (!pip.style.left) return;
+
+                const pipRect = pip.getBoundingClientRect();
+                const taskbarRect = taskbar.getBoundingClientRect();
+                const margin = 16;
+
+                const minX = margin;
+                const maxX = window.innerWidth - pipRect.width - margin;
+                const minY = margin;
+                const maxY = window.innerHeight - taskbarRect.height - pipRect.height - margin;
+                
+                let currentLeft = parseFloat(pip.style.left);
+                let currentTop = parseFloat(pip.style.top);
+                
+                if (isNaN(currentLeft) || isNaN(currentTop)) return;
+
+                let newX = Math.max(minX, Math.min(currentLeft, maxX));
+                let newY = Math.max(minY, Math.min(currentTop, maxY));
+                
+                pip.style.left = newX + 'px';
+                pip.style.top = newY + 'px';
+            });
         })();
     </script>
 </body>
