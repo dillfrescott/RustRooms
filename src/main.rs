@@ -1956,8 +1956,6 @@ struct SignalMessage {
     user_id: Option<String>, 
 }
 
-
-
 type UserTx = tokio::sync::mpsc::UnboundedSender<Result<Message, axum::Error>>;
 type RoomMap = Arc<Mutex<HashMap<String, HashMap<String, UserTx>>>>;
 
