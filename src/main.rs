@@ -246,7 +246,7 @@ const HTML_PAGE: &str = r###"
             background: rgba(15, 23, 42, 0.95);
             border-top: 1px solid rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            padding-bottom: env(safe-area-inset-bottom);
+            padding-bottom: calc(env(safe-area-inset-bottom) + 20px);
         }
 
     </style>
@@ -1289,6 +1289,7 @@ const HTML_PAGE: &str = r###"
             if (!localStream) return;
             
             let tracks = localStream.getVideoTracks();
+            let justAdded = false;
             
             if (tracks.length === 0) {
                 try {
@@ -1296,6 +1297,7 @@ const HTML_PAGE: &str = r###"
                     const newTrack = newStream.getVideoTracks()[0];
                     localStream.addTrack(newTrack);
                     tracks = localStream.getVideoTracks();
+                    justAdded = true;
 
                     for (const userId in peers) {
                         const pc = peers[userId];
@@ -1311,7 +1313,9 @@ const HTML_PAGE: &str = r###"
 
             if (tracks.length > 0) {
                 const track = tracks[0];
-                track.enabled = !track.enabled;
+                if (!justAdded) {
+                    track.enabled = !track.enabled;
+                }
                 
                 if (!track.enabled) {
                     btn.classList.add('active-red');
