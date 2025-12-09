@@ -1888,12 +1888,19 @@ async fn main() {
     let app = Router::new()
         .route("/", get(serve_room))
         .route("/new", get(redirect_to_new_room))
-        .route("/room/:id", get(serve_room))
-        .route("/ws/:id", get(ws_handler))
+        .route("/room/{id}", get(serve_room))
+        .route("/ws/{id}", get(ws_handler))
         .with_state(rooms);
 
     let port = 3000;
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("ERROR: Failed to bind to port {}: {}", port, e);
+            eprintln!("Is the server already running? Try killing the process using this port.");
+            std::process::exit(1);
+        }
+    };
     println!("SERVER RUNNING ON PORT {}", port);
     axum::serve(listener, app).await.unwrap();
 }
@@ -2009,59 +2016,47 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                                         let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
-                            } else if parsed.msg_type == "signal" {
-                                if let Some(target_id) = parsed.target {
-                                    if let Some(tx) = room.get(&target_id) {
-                                        let outbound = serde_json::to_string(&SignalMessage {
-                                            msg_type: "signal".into(),
-                                            user_id: Some(user_id.clone()), 
-                                            target: None,
-                                            data: parsed.data,
-                                        }).unwrap();
-                                        let _ = tx.send(Ok(Message::Text(outbound.into())));
-                                    }
-                                }
-                            } else if parsed.msg_type == "identify" {
-                                if let Some(target_id) = parsed.target {
-                                    if let Some(tx) = room.get(&target_id) {
-                                        let outbound = serde_json::to_string(&SignalMessage {
-                                            msg_type: "identify".into(),
-                                            user_id: Some(user_id.clone()),
-                                            target: None,
-                                            data: parsed.data,
-                                        }).unwrap();
-                                        let _ = tx.send(Ok(Message::Text(outbound.into())));
-                                    }
+                            } else if let Some(ref target_id) = parsed.target {
+                                if let Some(target_tx) = room.get(target_id) {
+                                    let mut forwarded_msg = parsed.clone();
+                                    forwarded_msg.user_id = Some(user_id.clone());
+                                    let forwarded_text = serde_json::to_string(&forwarded_msg).unwrap();
+                                    let _ = target_tx.send(Ok(Message::Text(forwarded_text.into())));
                                 }
                             }
                         }
                     }
                 }
+            } else if let Message::Close(_) = msg {
+                break;
             }
         } else {
             break;
         }
     }
 
-    if is_joined {
+    {
         let mut rooms_lock = rooms.lock().unwrap();
         if let Some(room) = rooms_lock.get_mut(&room_id) {
             room.remove(&user_id);
-            
-            let leave_msg = serde_json::to_string(&SignalMessage {
-                msg_type: "user-left".into(),
-                user_id: Some(user_id.clone()),
-                target: None,
-                data: None,
-            }).unwrap();
-
-            for tx in room.values() {
-                let _ = tx.send(Ok(Message::Text(leave_msg.clone().into())));
-            }
-
             if room.is_empty() {
                 rooms_lock.remove(&room_id);
+            } else {
+                let notify_msg = serde_json::to_string(&SignalMessage {
+                    msg_type: "user-left".into(),
+                    user_id: Some(user_id.clone()),
+                    target: None,
+                    data: None,
+                }).unwrap();
+
+                for (_, tx) in room.iter() {
+                    let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                }
             }
         }
     }
 }
+
+
+
+
