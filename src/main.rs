@@ -20,7 +20,7 @@ const HTML_PAGE: &str = r###"
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Rust Rooms</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,7 +30,7 @@ const HTML_PAGE: &str = r###"
             color: #f8fafc; 
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
             overflow: hidden; 
-            height: 100vh;
+            height: 100dvh; 
             width: 100vw;
         }
         
@@ -40,7 +40,7 @@ const HTML_PAGE: &str = r###"
         ::-webkit-scrollbar-thumb:hover { background: #64748b; }
 
         .glass-panel {
-            background: rgba(30, 41, 59, 0.8);
+            background: rgba(30, 41, 59, 0.95);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -55,7 +55,6 @@ const HTML_PAGE: &str = r###"
             transition: all 0.3s ease;
             display: flex;
             flex-direction: column;
-            min-height: 0;
             width: 100%;
             height: 100%;
         }
@@ -65,51 +64,44 @@ const HTML_PAGE: &str = r###"
             height: 100%;
             object-fit: contain;
             background: #000;
-            transition: object-fit 0.3s ease; 
         }
 
         .grid-expand {
             grid-auto-rows: minmax(0, 1fr);
         }
 
-        .avatar-placeholder {
+        .avatar-layer {
             position: absolute;
             inset: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: #334155;
-            color: #94a3b8;
-            font-size: 3rem;
-            z-index: 0;
+            background: #1e293b;
+            z-index: 10;
         }
-        
+
         .avatar-img {
             position: absolute;
             inset: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
-            z-index: 1;
             filter: blur(20px); 
             opacity: 0.4;
         }
 
         .avatar-center {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            position: relative;
             width: 80px; 
             height: 80px;
             border-radius: 50%;
             overflow: hidden;
             border: 3px solid rgba(255, 255, 255, 0.1);
-            z-index: 2;
             background: #334155;
             display: flex;
             align-items: center;
             justify-content: center;
+            z-index: 20;
         }
         
         @media (min-width: 768px) {
@@ -132,14 +124,14 @@ const HTML_PAGE: &str = r###"
 
         .control-btn {
             padding: 12px;
-            border-radius: 9999px;
+            border-radius: 12px;
             border: none;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            background: rgba(51, 65, 85, 0.8);
+            background: rgba(51, 65, 85, 0.5);
             color: white;
             width: 48px;
             height: 48px;
@@ -169,8 +161,9 @@ const HTML_PAGE: &str = r###"
 
         .pip-wrapper {
             position: fixed;
-            bottom: 120px;
+            bottom: 100px; 
             right: 16px;
+            width: 120px;
             aspect-ratio: 16/9;
             border-radius: 0.75rem;
             border: 2px solid rgba(255, 255, 255, 0.1);
@@ -178,6 +171,14 @@ const HTML_PAGE: &str = r###"
             z-index: 40;
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
             transition: transform 0.2s;
+            background: #1e293b;
+        }
+        
+        @media (min-width: 768px) {
+            .pip-wrapper {
+                width: 280px;
+                bottom: 120px;
+            }
         }
         
         .pip-wrapper:hover {
@@ -240,9 +241,17 @@ const HTML_PAGE: &str = r###"
             transition: box-shadow 0.1s ease-in-out;
         }
 
+        /* Taskbar style footer */
+        .taskbar {
+            background: rgba(15, 23, 42, 0.95);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
     </style>
 </head>
-<body class="flex flex-col h-screen w-screen overflow-hidden">
+<body class="flex flex-col h-screen w-screen overflow-hidden bg-slate-900">
 
     <div id="welcomeOverlay" class="fixed inset-0 z-[70] bg-slate-900 flex flex-col items-center justify-center p-4 transition-opacity duration-300" style="display: none;">
         <div class="text-center space-y-6 max-w-md w-full">
@@ -371,23 +380,24 @@ const HTML_PAGE: &str = r###"
     </div>
 
     <div id="appLayout" class="hidden flex-col h-full w-full">
-        <div class="absolute top-0 left-0 right-0 p-3 md:p-4 z-40 flex justify-between items-center pointer-events-none">
-            <div class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-full pointer-events-auto flex items-center gap-2">
+        <div class="flex-none p-3 md:p-4 z-40 flex justify-between items-center">
+            <div class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-full flex items-center gap-2">
                 <div id="connectionDot" class="connection-dot"></div>
                 <span id="statusText" class="text-xs md:text-sm font-medium text-slate-200">Waiting...</span>
             </div>
 
-            <div id="btnCopy" class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-full pointer-events-auto cursor-pointer hover:bg-slate-700/50 transition-all flex items-center gap-2" onclick="copyLink()">
+            <div id="btnCopy" class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-full cursor-pointer hover:bg-slate-700/50 transition-all flex items-center gap-2" onclick="copyLink()">
                 <span class="text-xs md:text-sm font-medium text-slate-200">Invite Link</span>
                 <svg id="iconCopy" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
             </div>
         </div>
 
-        <main class="flex-1 w-full flex items-center justify-center p-4 overflow-hidden relative">
-            <div id="remoteGrid" class="grid gap-4 w-full h-full max-w-[1600px] transition-all duration-500 grid-expand">
+        <main class="flex-1 w-full relative min-h-0">
+            <div class="absolute inset-0 p-2 md:p-4 overflow-hidden flex items-center justify-center">
+                 <div id="remoteGrid" class="grid gap-4 w-full h-full max-w-[1600px] transition-all duration-500 grid-expand"></div>
             </div>
             
-            <div id="emptyState" class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center text-slate-500">
+            <div id="emptyState" class="hidden absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-center text-slate-500 pointer-events-none">
                 <div class="mb-4">
                     <svg class="mx-auto h-16 w-16 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -397,7 +407,7 @@ const HTML_PAGE: &str = r###"
                 <p class="text-sm mt-2">Share the invite link to get started.</p>
             </div>
 
-            <div class="pip-wrapper bg-slate-800 w-32 md:w-72" id="localPipWrapper">
+            <div class="pip-wrapper" id="localPipWrapper">
                  <div class="w-full h-full relative flex flex-col">
                     <div id="localAvatarLayer" class="absolute inset-0 z-20 bg-slate-800 flex items-center justify-center" style="display: none;">
                         <img id="localAvatarImg" src="" class="absolute inset-0 w-full h-full object-cover filter blur-xl opacity-40 hidden">
@@ -415,8 +425,8 @@ const HTML_PAGE: &str = r###"
             </div>
         </main>
 
-        <div class="w-full flex justify-center p-6 shrink-0 z-50">
-            <div class="glass-panel px-6 py-3 rounded-full flex gap-3 md:gap-4 shadow-2xl pointer-events-auto">
+        <footer class="flex-none taskbar w-full z-50">
+            <div class="flex justify-center items-center py-3 md:py-4 gap-3 md:gap-4 px-4">
                 <button class="control-btn" id="btnMic" onclick="toggleMic()" title="Toggle Microphone">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
                 </button>
@@ -434,7 +444,7 @@ const HTML_PAGE: &str = r###"
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
                 </button>
             </div>
-        </div>
+        </footer>
     </div>
 
     <script>
@@ -1036,7 +1046,7 @@ const HTML_PAGE: &str = r###"
                        `;
                    } else {
                        avatarLayer.innerHTML = `
-                           <div class="flex flex-col items-center z-20">
+                           <div class="avatar-center" style="background:transparent; border:none;">
                                <div class="text-6xl mb-2">👤</div>
                            </div>
                        `;
@@ -1099,7 +1109,7 @@ const HTML_PAGE: &str = r###"
                     vid.playsInline = true; 
                     
                     const avatarLayer = document.createElement('div');
-                    avatarLayer.className = 'avatar-layer absolute inset-0 z-10 bg-slate-800 flex items-center justify-center';
+                    avatarLayer.className = 'avatar-layer';
                     
                     if (avatarUrl) {
                         avatarLayer.innerHTML = `
@@ -1110,7 +1120,7 @@ const HTML_PAGE: &str = r###"
                         `;
                     } else {
                         avatarLayer.innerHTML = `
-                            <div class="flex flex-col items-center z-20">
+                            <div class="avatar-center" style="background:transparent; border:none;">
                                 <div class="text-6xl mb-2">👤</div>
                             </div>
                         `;
@@ -1146,15 +1156,9 @@ const HTML_PAGE: &str = r###"
                     
                     setupAudioMonitor(event.streams[0], `wrapper-${userId}`);
 
-                    event.track.onmute = () => {
-                         checkActive();
-                    };
-                    event.track.onunmute = () => {
-                         checkActive();
-                    };
-                    event.track.onended = () => {
-                         checkActive();
-                    };
+                    event.track.onmute = () => { checkActive(); };
+                    event.track.onunmute = () => { checkActive(); };
+                    event.track.onended = () => { checkActive(); };
 
                     const checkActive = () => {
                          if (!vid.srcObject) return;
@@ -1280,13 +1284,35 @@ const HTML_PAGE: &str = r###"
             }
         }
 
-        function toggleCam() {
+        async function toggleCam() {
+            const btn = document.getElementById('btnCam');
             if (!localStream) return;
-            const tracks = localStream.getVideoTracks();
+            
+            let tracks = localStream.getVideoTracks();
+            
+            if (tracks.length === 0) {
+                try {
+                    const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    const newTrack = newStream.getVideoTracks()[0];
+                    localStream.addTrack(newTrack);
+                    tracks = localStream.getVideoTracks();
+
+                    for (const userId in peers) {
+                        const pc = peers[userId];
+                        pc.addTrack(newTrack, localStream);
+                        negotiate(userId, pc);
+                    }
+                } catch (e) {
+                    console.error("Could not add camera", e);
+                    alert("Could not access camera. Please check permissions.");
+                    return;
+                }
+            }
+
             if (tracks.length > 0) {
                 const track = tracks[0];
                 track.enabled = !track.enabled;
-                const btn = document.getElementById('btnCam');
+                
                 if (!track.enabled) {
                     btn.classList.add('active-red');
                     btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M21 21l-3.5-3.5m-2-2l-2-2m-2-2l-2-2m-2-2l-3.5-3.5"></path><path d="M15 7h5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-5"></path><path d="M4 8v8a2 2 0 0 0 2 2h4.5"></path></svg>`;
@@ -1302,8 +1328,6 @@ const HTML_PAGE: &str = r###"
                         data: { enabled: track.enabled }
                     }));
                 }
-            } else {
-                alert("No camera found.");
             }
         }
 
