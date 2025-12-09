@@ -1610,79 +1610,78 @@ const HTML_PAGE: &str = r###"
             let isDragging = false;
             let dragOffset = { x: 0, y: 0 };
             
-            function initDrag(e) {
-                // Ignore clicks on controls if any exist inside pip in future
-                if (e.target.closest('button') || e.target.closest('input')) return;
-                
+            function startDrag(clientX, clientY) {
                 isDragging = true;
                 pip.style.cursor = 'grabbing';
                 
-                // Convert current position to fixed top/left to allow free movement
                 const rect = pip.getBoundingClientRect();
+                
+                // Switch to fixed positioning based on current location
                 pip.style.bottom = 'auto';
                 pip.style.right = 'auto';
                 pip.style.left = rect.left + 'px';
                 pip.style.top = rect.top + 'px';
                 
-                const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
-                const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
-                
                 dragOffset.x = clientX - rect.left;
                 dragOffset.y = clientY - rect.top;
-                
-                document.addEventListener('mousemove', onDrag);
-                document.addEventListener('touchmove', onDrag, { passive: false });
-                document.addEventListener('mouseup', stopDrag);
-                document.addEventListener('touchend', stopDrag);
             }
             
-            function onDrag(e) {
-                if (!isDragging) return;
-                if (e.cancelable) e.preventDefault(); // Prevent scrolling on touch
+            function onMouseDown(e) {
+                // Ignore clicks on controls/inputs
+                if (e.target.closest('button') || e.target.closest('input')) return;
                 
-                const clientX = e.clientX || (e.touches ? e.touches[0].clientX : 0);
-                const clientY = e.clientY || (e.touches ? e.touches[0].clientY : 0);
+                e.preventDefault(); // Prevent native drag selection
+                
+                startDrag(e.clientX, e.clientY);
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+            }
+            
+            function onTouchStart(e) {
+                if (e.target.closest('button') || e.target.closest('input')) return;
+                
+                const touch = e.touches[0];
+                startDrag(touch.clientX, touch.clientY);
+                
+                document.addEventListener('touchmove', onTouchMove, { passive: false });
+                document.addEventListener('touchend', onTouchEnd);
+                document.addEventListener('touchcancel', onTouchEnd);
+            }
+
+            function handleMove(clientX, clientY) {
+                if (!isDragging) return;
                 
                 let newX = clientX - dragOffset.x;
                 let newY = clientY - dragOffset.y;
                 
                 const pipRect = pip.getBoundingClientRect();
                 const taskbarRect = taskbar.getBoundingClientRect();
-                
-                // Margins
                 const margin = 16;
                 
-                // Screen Bounds
                 const minX = margin;
                 const maxX = window.innerWidth - pipRect.width - margin;
                 const minY = margin;
                 const maxY = window.innerHeight - taskbarRect.height - pipRect.height - margin;
                 
-                // 1. Clamp to screen and above taskbar
+                // 1. Clamp to screen
                 newX = Math.max(minX, Math.min(newX, maxX));
                 newY = Math.max(minY, Math.min(newY, maxY));
                 
-                // 2. Collision with Top Left (Status)
+                // 2. Avoid Status (Top Left)
                 if (connectionDot && connectionDot.parentElement) {
                     const statusRect = connectionDot.parentElement.getBoundingClientRect();
                     const dangerRight = statusRect.right + margin;
                     const dangerBottom = statusRect.bottom + margin;
                     
-                    // If we are overlapping the danger zone
                     if (newX < dangerRight && newY < dangerBottom) {
-                        // Push out to the closest edge
                         const distToRight = dangerRight - newX;
                         const distToBottom = dangerBottom - newY;
-                        
-                        if (distToRight < distToBottom) {
-                            newX = dangerRight;
-                        } else {
-                            newY = dangerBottom;
-                        }
+                        if (distToRight < distToBottom) newX = dangerRight;
+                        else newY = dangerBottom;
                     }
                 }
                 
-                // 3. Collision with Top Right (Copy Link)
+                // 3. Avoid Copy Button (Top Right)
                 if (btnCopy) {
                     const copyRect = btnCopy.getBoundingClientRect();
                     const dangerLeft = copyRect.left - margin - pipRect.width;
@@ -1691,12 +1690,8 @@ const HTML_PAGE: &str = r###"
                     if (newX > dangerLeft && newY < dangerBottom) {
                         const distToLeft = newX - dangerLeft;
                         const distToBottom = dangerBottom - newY;
-                        
-                        if (distToLeft < distToBottom) {
-                            newX = dangerLeft;
-                        } else {
-                            newY = dangerBottom;
-                        }
+                        if (distToLeft < distToBottom) newX = dangerLeft;
+                        else newY = dangerBottom;
                     }
                 }
                 
@@ -1704,17 +1699,33 @@ const HTML_PAGE: &str = r###"
                 pip.style.top = newY + 'px';
             }
             
-            function stopDrag() {
-                isDragging = false;
-                pip.style.cursor = 'grab';
-                document.removeEventListener('mousemove', onDrag);
-                document.removeEventListener('touchmove', onDrag);
-                document.removeEventListener('mouseup', stopDrag);
-                document.removeEventListener('touchend', stopDrag);
+            function onMouseMove(e) {
+                handleMove(e.clientX, e.clientY);
             }
             
-            pip.addEventListener('mousedown', initDrag);
-            pip.addEventListener('touchstart', initDrag, { passive: false });
+            function onTouchMove(e) {
+                if (e.cancelable) e.preventDefault(); // Prevent scrolling
+                const touch = e.touches[0];
+                handleMove(touch.clientX, touch.clientY);
+            }
+            
+            function onMouseUp() {
+                isDragging = false;
+                pip.style.cursor = 'grab';
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            }
+            
+            function onTouchEnd() {
+                isDragging = false;
+                pip.style.cursor = 'grab';
+                document.removeEventListener('touchmove', onTouchMove);
+                document.removeEventListener('touchend', onTouchEnd);
+                document.removeEventListener('touchcancel', onTouchEnd);
+            }
+            
+            pip.addEventListener('mousedown', onMouseDown);
+            pip.addEventListener('touchstart', onTouchStart, { passive: false });
         })();
     </script>
 </body>
