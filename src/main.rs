@@ -227,16 +227,23 @@ const HTML_PAGE: &str = r###"
             right: 8px;
             background: rgba(0, 0, 0, 0.6);
             backdrop-filter: blur(4px);
-            padding: 4px 8px;
-            border-radius: 20px;
+            padding: 6px 10px;
+            border-radius: 12px;
             display: flex;
-            align-items: center;
-            gap: 6px;
+            flex-direction: column;
+            gap: 4px;
             opacity: 0;
             transition: opacity 0.2s;
+            align-items: flex-end;
         }
         .video-container:hover .volume-controls {
             opacity: 1;
+        }
+        
+        .vol-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         .speaking-glow {
@@ -956,6 +963,7 @@ const HTML_PAGE: &str = r###"
                 updateStatus('connected', 'Connected');
                 const camEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
                 const screenEnabled = !!screenStream;
+                const screenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
                 const myId = getPersistentId();
                 ws.send(JSON.stringify({ 
                     type: "join", 
@@ -964,7 +972,8 @@ const HTML_PAGE: &str = r###"
                         nickname: userNickname,
                         avatar: userAvatar,
                         camEnabled: camEnabled,
-                        screenEnabled: screenEnabled
+                        screenEnabled: screenEnabled,
+                        screenAudio: screenHasAudio
                     } 
                 }));
                 checkEmpty();
@@ -989,6 +998,7 @@ const HTML_PAGE: &str = r###"
                         
                         const myCamEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
                         const myScreenEnabled = !!screenStream;
+                        const myScreenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
                         ws.send(JSON.stringify({
                             type: 'identify',
                             target: msg.userId,
@@ -996,7 +1006,8 @@ const HTML_PAGE: &str = r###"
                                 nickname: userNickname, 
                                 avatar: userAvatar,
                                 camEnabled: myCamEnabled,
-                                screenEnabled: myScreenEnabled
+                                screenEnabled: myScreenEnabled,
+                                screenAudio: myScreenHasAudio
                             }
                         }));
                         break;
@@ -1018,6 +1029,13 @@ const HTML_PAGE: &str = r###"
                             peerScreenStatus[msg.userId] = msg.data.enabled;
                             const v = document.getElementById(`vid-${msg.userId}`);
                             if (v) v.style.objectFit = msg.data.enabled ? 'contain' : 'contain';
+
+                            if (!msg.data.enabled || !msg.data.hasAudio) {
+                                const row = document.getElementById(`vol-row-screen-${msg.userId}`);
+                                if (row) row.remove();
+                                const aud = document.getElementById(`aud-screen-${msg.userId}`);
+                                if (aud) aud.remove();
+                            }
                         }
                         break;
                     case 'identify':
@@ -1130,6 +1148,7 @@ const HTML_PAGE: &str = r###"
                     vid.id = `vid-${userId}`;
                     vid.autoplay = true;
                     vid.playsInline = true; 
+                    vid.srcObject = new MediaStream();
                     
                     const avatarLayer = document.createElement('div');
                     avatarLayer.className = 'avatar-layer';
@@ -1154,14 +1173,9 @@ const HTML_PAGE: &str = r###"
                     label.innerText = displayName;
 
                     const volControls = document.createElement('div');
+                    volControls.id = `vol-controls-${userId}`;
                     volControls.className = 'volume-controls z-30';
-                    volControls.innerHTML = `
-                        <button class="text-white hover:text-blue-400" onclick="toggleMute('${userId}')" id="mute-${userId}">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
-                        </button>
-                        <input type="range" min="0" max="1" step="0.05" value="1" oninput="setVolume('${userId}', this.value)">
-                    `;
-
+                    
                     container.appendChild(vid); 
                     container.appendChild(avatarLayer);
                     container.appendChild(label);
@@ -1171,53 +1185,107 @@ const HTML_PAGE: &str = r###"
                 }
 
                 const vid = document.getElementById(`vid-${userId}`);
-                if (event.streams && event.streams[0]) {
-                    if (vid.srcObject !== event.streams[0]) {
-                        vid.srcObject = event.streams[0];
+                const volControls = document.getElementById(`vol-controls-${userId}`);
+                const mainStream = vid.srcObject;
+
+                if (event.track.kind === 'video') {
+                     mainStream.getVideoTracks().forEach(t => mainStream.removeTrack(t));
+                     mainStream.addTrack(event.track);
+                     vid.play().catch(e => console.error("Remote play err", e));
+                     
+                     event.track.onmute = () => { checkActive(userId); };
+                     event.track.onunmute = () => { checkActive(userId); };
+                     event.track.onended = () => { checkActive(userId); };
+                }
+                
+                if (event.track.kind === 'audio') {
+                    if (mainStream.getAudioTracks().length === 0) {
+                        mainStream.addTrack(event.track);
+                        setupAudioMonitor(mainStream, `wrapper-${userId}`);
+                        
+                        const row = document.createElement('div');
+                        row.className = 'vol-row';
+                        row.id = `vol-row-main-${userId}`;
+                        row.innerHTML = `
+                            <button class="text-white hover:text-blue-400" onclick="toggleMute('${userId}', 'main')" id="mute-main-${userId}">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                            </button>
+                            <input type="range" min="0" max="1" step="0.05" value="1" oninput="setVolume('${userId}', 'main', this.value)">
+                        `;
+                        volControls.insertBefore(row, volControls.firstChild);
+                        
+                        event.track.onended = () => {
+                            row.remove();
+                        };
+                    } else {
+                        const screenStream = new MediaStream([event.track]);
+                        const audEl = new Audio();
+                        audEl.srcObject = screenStream;
+                        audEl.id = `aud-screen-${userId}`;
+                        audEl.autoplay = true;
+                        container.appendChild(audEl);
+                        
+                        const row = document.createElement('div');
+                        row.className = 'vol-row';
+                        row.id = `vol-row-screen-${userId}`;
+                        row.innerHTML = `
+                             <button class="text-white hover:text-purple-400" onclick="toggleMute('${userId}', 'screen')" id="mute-screen-${userId}" title="Screen Audio">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="14" rx="2" ry="2"></rect><line x1="12" y1="22" x2="12" y2="16"></line><path d="M5 12h14"></path><path d="M12 12v4"></path></svg>
+                            </button>
+                            <input type="range" min="0" max="1" step="0.05" value="1" oninput="setVolume('${userId}', 'screen', this.value)">
+                        `;
+                        volControls.appendChild(row);
+                        
+                        event.track.onended = () => {
+                            audEl.remove();
+                            row.remove();
+                        };
                     }
-                    vid.play().catch(e => console.error("Remote play err", e));
-                    
-                    setupAudioMonitor(event.streams[0], `wrapper-${userId}`);
+                }
+                
+                const checkActive = (uid) => {
+                     const v = document.getElementById(`vid-${uid}`);
+                     if (!v || !v.srcObject) return;
+                     
+                     const isCamOff = peerCamStatus[uid] === false;
+                     const isScreenOn = peerScreenStatus[uid] === true;
 
-                    event.track.onmute = () => { checkActive(); };
-                    event.track.onunmute = () => { checkActive(); };
-                    event.track.onended = () => { checkActive(); };
+                     if (isScreenOn) {
+                         v.classList.add('active');
+                         v.style.objectFit = 'contain';
+                         return;
+                     }
 
-                    const checkActive = () => {
-                         if (!vid.srcObject) return;
-                         
-                         const isCamOff = peerCamStatus[userId] === false;
-                         const isScreenOn = peerScreenStatus[userId] === true;
+                     if (isCamOff) {
+                         v.classList.remove('active');
+                         return;
+                     }
 
-                         if (isScreenOn) {
-                             vid.classList.add('active');
-                             return;
+                     const vTracks = v.srcObject.getVideoTracks();
+                     let hasActiveVideo = false;
+                     if (vTracks.length > 0) {
+                         const t = vTracks[0];
+                         if (t.enabled && !t.muted && t.readyState === 'live') {
+                             hasActiveVideo = true;
                          }
+                     }
 
-                         if (isCamOff) {
-                             vid.classList.remove('active');
-                             return;
-                         }
-
-                         const vTracks = vid.srcObject.getVideoTracks();
-                         let hasActiveVideo = false;
-                         if (vTracks.length > 0) {
-                             const t = vTracks[0];
-                             if (t.enabled && !t.muted && t.readyState === 'live') {
-                                 hasActiveVideo = true;
-                             }
-                         }
-
-                         if (hasActiveVideo) {
-                             vid.classList.add('active');
-                         } else {
-                             vid.classList.remove('active');
-                         }
-                    };
-                    
-                    vid.onloadedmetadata = checkActive;
-                    vid.onresize = checkActive;
-                    setInterval(checkActive, 1000); 
+                     if (hasActiveVideo) {
+                         v.classList.add('active');
+                         v.style.objectFit = 'cover';
+                     } else {
+                         v.classList.remove('active');
+                     }
+                };
+                
+                if (event.track.kind === 'video') {
+                     vid.onloadedmetadata = () => checkActive(userId);
+                     vid.onresize = () => checkActive(userId);
+                }
+                
+                if (!container.dataset.interval) {
+                    const intId = setInterval(() => checkActive(userId), 1000);
+                    container.dataset.interval = intId;
                 }
             };
 
@@ -1267,25 +1335,51 @@ const HTML_PAGE: &str = r###"
         }
 
 
-        window.toggleMute = function(userId) {
-            const vid = document.getElementById(`vid-${userId}`);
-            const btn = document.getElementById(`mute-${userId}`);
-            if (vid) {
-                vid.muted = !vid.muted;
-                if (vid.muted) {
-                    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`;
-                    btn.classList.add('text-red-500');
+        window.toggleMute = function(userId, type) {
+            let el;
+            let btn;
+            
+            if (type === 'screen') {
+                el = document.getElementById(`aud-screen-${userId}`);
+                btn = document.getElementById(`mute-screen-${userId}`);
+            } else {
+                el = document.getElementById(`vid-${userId}`);
+                btn = document.getElementById(`mute-main-${userId}`);
+            }
+
+            if (el) {
+                el.muted = !el.muted;
+                const isMuted = el.muted;
+                
+                if (type === 'screen') {
+                     if (isMuted) {
+                        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="14" rx="2" ry="2"></rect><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`;
+                        btn.classList.add('text-red-500');
+                    } else {
+                        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="14" rx="2" ry="2"></rect><line x1="12" y1="22" x2="12" y2="16"></line><path d="M5 12h14"></path><path d="M12 12v4"></path></svg>`;
+                        btn.classList.remove('text-red-500');
+                    }
                 } else {
-                    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
-                    btn.classList.remove('text-red-500');
+                    if (isMuted) {
+                        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`;
+                        btn.classList.add('text-red-500');
+                    } else {
+                        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>`;
+                        btn.classList.remove('text-red-500');
+                    }
                 }
             }
         }
 
-        window.setVolume = function(userId, val) {
-            const vid = document.getElementById(`vid-${userId}`);
-            if (vid) {
-                vid.volume = val;
+        window.setVolume = function(userId, type, val) {
+             let el;
+            if (type === 'screen') {
+                el = document.getElementById(`aud-screen-${userId}`);
+            } else {
+                el = document.getElementById(`vid-${userId}`);
+            }
+            if (el) {
+                el.volume = val;
             }
         }
 
@@ -1363,7 +1457,8 @@ const HTML_PAGE: &str = r###"
             
             if (screenStream) {
                 let videoTrack = localStream ? localStream.getVideoTracks()[0] : null;
-                
+                const screenAudioTrack = screenStream.getAudioTracks()[0];
+
                 screenStream.getTracks().forEach(t => t.stop());
                 screenStream = null;
                 btn.classList.remove('active-green');
@@ -1377,21 +1472,35 @@ const HTML_PAGE: &str = r###"
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'screen-toggle',
-                        data: { enabled: false }
+                        data: { enabled: false, hasAudio: false }
                     }));
                 }
 
                 for (const userId in peers) {
                     const pc = peers[userId];
-                    const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                    const senders = pc.getSenders();
+                    let shouldNegotiate = false;
                     
-                    if (sender) {
+                    const vidSender = senders.find(s => s.track && s.track.kind === 'video');
+                    if (vidSender) {
                         if (videoTrack) {
-                            sender.replaceTrack(videoTrack);
+                            vidSender.replaceTrack(videoTrack);
                         } else {
-                            pc.removeTrack(sender);
-                            negotiate(userId, pc);
+                            pc.removeTrack(vidSender);
+                            shouldNegotiate = true;
                         }
+                    }
+
+                    if (screenAudioTrack) {
+                        const audSender = senders.find(s => s.track && s.track.id === screenAudioTrack.id);
+                        if (audSender) {
+                            pc.removeTrack(audSender);
+                            shouldNegotiate = true;
+                        }
+                    }
+                    
+                    if (shouldNegotiate) {
+                        negotiate(userId, pc);
                     }
                 }
 
@@ -1399,8 +1508,16 @@ const HTML_PAGE: &str = r###"
 
             } else {
                 try {
-                    screenStream = await navigator.mediaDevices.getDisplayMedia({ cursor: true });
+                    screenStream = await navigator.mediaDevices.getDisplayMedia({ 
+                        video: { cursor: true }, 
+                        audio: {
+                            echoCancellation: false,
+                            noiseSuppression: false,
+                            autoGainControl: false
+                        } 
+                    });
                     const screenTrack = screenStream.getVideoTracks()[0];
+                    const screenAudioTrack = screenStream.getAudioTracks()[0];
                     
                     localVideo.srcObject = screenStream;
                     
@@ -1409,22 +1526,37 @@ const HTML_PAGE: &str = r###"
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
                             type: 'screen-toggle',
-                            data: { enabled: true }
+                            data: { enabled: true, hasAudio: !!screenAudioTrack }
                         }));
                     }
 
                     for (const userId in peers) {
                         const pc = peers[userId];
-                        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                        const senders = pc.getSenders();
+                        const vidSender = senders.find(s => s.track && s.track.kind === 'video');
+                        let shouldNegotiate = false;
                         
-                        if (sender) {
-                            sender.replaceTrack(screenTrack);
+                        if (vidSender) {
+                            vidSender.replaceTrack(screenTrack);
                         } else {
                             if (localStream) {
                                 pc.addTrack(screenTrack, localStream);
                             } else {
                                 pc.addTrack(screenTrack, screenStream);
                             }
+                            shouldNegotiate = true;
+                        }
+
+                        if (screenAudioTrack) {
+                            if (localStream) {
+                                pc.addTrack(screenAudioTrack, localStream);
+                            } else {
+                                pc.addTrack(screenAudioTrack, screenStream);
+                            }
+                            shouldNegotiate = true;
+                        }
+                        
+                        if (shouldNegotiate) {
                             negotiate(userId, pc);
                         }
                     }
