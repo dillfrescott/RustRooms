@@ -251,6 +251,30 @@ const HTML_PAGE: &str = r###"
             transition: box-shadow 0.1s ease-in-out;
         }
 
+        .video-container:fullscreen {
+            border-radius: 0;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .video-container:fullscreen video {
+            max-height: 100vh;
+            max-width: 100vw;
+            height: 100%;
+            width: 100%;
+        }
+
+        .video-container:fullscreen .volume-controls {
+            bottom: 32px;
+            right: 32px;
+            transform: scale(1.2);
+            transform-origin: bottom right;
+            padding: 12px;
+            gap: 8px;
+        }
+
         /* Taskbar style footer */
         .taskbar {
             background: rgba(15, 23, 42, 0.95);
@@ -1176,10 +1200,27 @@ const HTML_PAGE: &str = r###"
                     volControls.id = `vol-controls-${userId}`;
                     volControls.className = 'volume-controls z-30';
                     
+                    const fsBtn = document.createElement('button');
+                    fsBtn.className = 'absolute top-3 right-3 p-2 rounded-xl bg-black/40 hover:bg-blue-600 text-white backdrop-blur-md transition-all opacity-0 group-hover:opacity-100 scale-90 hover:scale-100 z-30';
+                    fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2-2h3"/></svg>';
+                    fsBtn.onclick = () => toggleFullscreen(userId);
+                    fsBtn.title = "Toggle Fullscreen";
+                    
+                    container.addEventListener('fullscreenchange', () => {
+                        if (document.fullscreenElement === container) {
+                            fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+                            fsBtn.classList.add('bg-blue-600');
+                        } else {
+                            fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2-2h3"/></svg>';
+                            fsBtn.classList.remove('bg-blue-600');
+                        }
+                    });
+
                     container.appendChild(vid); 
                     container.appendChild(avatarLayer);
                     container.appendChild(label);
                     container.appendChild(volControls);
+                    container.appendChild(fsBtn);
                     remoteGrid.appendChild(container);
                     checkEmpty();
                 }
@@ -1335,6 +1376,19 @@ const HTML_PAGE: &str = r###"
         }
 
 
+        window.toggleFullscreen = function(userId) {
+            const el = document.getElementById(`wrapper-${userId}`);
+            if (!el) return;
+            
+            if (!document.fullscreenElement) {
+                el.requestFullscreen().catch(err => {
+                    console.error(`Error attempting to enable fullscreen: ${err.message}`);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        };
+
         window.toggleMute = function(userId, type) {
             let el;
             let btn;
@@ -1416,10 +1470,12 @@ const HTML_PAGE: &str = r###"
                     tracks = localStream.getVideoTracks();
                     justAdded = true;
 
-                    for (const userId in peers) {
-                        const pc = peers[userId];
-                        pc.addTrack(newTrack, localStream);
-                        negotiate(userId, pc);
+                    if (!screenStream) {
+                        for (const userId in peers) {
+                            const pc = peers[userId];
+                            pc.addTrack(newTrack, localStream);
+                            negotiate(userId, pc);
+                        }
                     }
                 } catch (e) {
                     console.error("Could not add camera", e);
