@@ -306,7 +306,7 @@ const HTML_PAGE: &str = r###"
                     <div class="flex-1 space-y-3">
                         <div>
                             <label class="block text-xs font-medium text-slate-400 mb-1">Nickname</label>
-                            <input type="text" id="nicknameInput" placeholder="Enter your name" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                            <input type="text" id="nicknameInput" placeholder="Enter your name" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all" maxlength="32">
                         </div>
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -363,7 +363,7 @@ const HTML_PAGE: &str = r###"
 
                 <div>
                     <label class="block text-xs font-medium text-slate-400 mb-1">Nickname</label>
-                    <input type="text" id="settingsNicknameInput" placeholder="Enter your name" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+                    <input type="text" id="settingsNicknameInput" placeholder="Enter your name" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all" maxlength="32">
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
