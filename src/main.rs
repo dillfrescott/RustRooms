@@ -246,7 +246,13 @@ const HTML_PAGE: &str = r###"
             background: rgba(15, 23, 42, 0.95);
             border-top: 1px solid rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            padding-bottom: calc(env(safe-area-inset-bottom) + 20px);
+            padding-bottom: calc(env(safe-area-inset-bottom) + 40px);
+        }
+
+        @media (min-width: 768px) {
+            .taskbar {
+                padding-bottom: calc(env(safe-area-inset-bottom) + 20px);
+            }
         }
 
     </style>
@@ -1094,6 +1100,13 @@ const HTML_PAGE: &str = r###"
 
             if (localStream) {
                 localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+            }
+
+            if (!localStream || localStream.getVideoTracks().length === 0) {
+                 pc.addTransceiver('video', { direction: 'recvonly' });
+            }
+            if (!localStream || localStream.getAudioTracks().length === 0) {
+                 pc.addTransceiver('audio', { direction: 'recvonly' });
             }
 
             pc.ontrack = (event) => {
