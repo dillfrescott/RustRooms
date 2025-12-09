@@ -312,13 +312,13 @@ const HTML_PAGE: &str = r###"
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                              <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Microphone</label>
-                                <select id="audioSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <select id="audioSource" onchange="startPreview()" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                                     <option value="">Default</option>
                                 </select>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Camera</label>
-                                <select id="videoSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <select id="videoSource" onchange="startPreview()" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                                     <option value="">Default</option>
                                 </select>
                             </div>
@@ -1608,7 +1608,6 @@ const HTML_PAGE: &str = r###"
              }
         }
 
-        // Draggable Local PIP Logic
         (function() {
             const pip = document.getElementById('localPipWrapper');
             const taskbar = document.querySelector('.taskbar');
@@ -1624,7 +1623,6 @@ const HTML_PAGE: &str = r###"
                 
                 const rect = pip.getBoundingClientRect();
                 
-                // Switch to fixed positioning based on current location
                 pip.style.bottom = 'auto';
                 pip.style.right = 'auto';
                 pip.style.left = rect.left + 'px';
@@ -1635,10 +1633,9 @@ const HTML_PAGE: &str = r###"
             }
             
             function onMouseDown(e) {
-                // Ignore clicks on controls/inputs
                 if (e.target.closest('button') || e.target.closest('input')) return;
                 
-                e.preventDefault(); // Prevent native drag selection
+                e.preventDefault();
                 
                 startDrag(e.clientX, e.clientY);
                 document.addEventListener('mousemove', onMouseMove);
@@ -1671,11 +1668,9 @@ const HTML_PAGE: &str = r###"
                 const minY = margin;
                 const maxY = window.innerHeight - taskbarRect.height - pipRect.height - margin;
                 
-                // 1. Clamp to screen
                 newX = Math.max(minX, Math.min(newX, maxX));
                 newY = Math.max(minY, Math.min(newY, maxY));
                 
-                // 2. Avoid Status (Top Left)
                 if (connectionDot && connectionDot.parentElement) {
                     const statusRect = connectionDot.parentElement.getBoundingClientRect();
                     const dangerRight = statusRect.right + margin;
@@ -1689,7 +1684,6 @@ const HTML_PAGE: &str = r###"
                     }
                 }
                 
-                // 3. Avoid Copy Button (Top Right)
                 if (btnCopy) {
                     const copyRect = btnCopy.getBoundingClientRect();
                     const dangerLeft = copyRect.left - margin - pipRect.width;
@@ -1712,7 +1706,7 @@ const HTML_PAGE: &str = r###"
             }
             
             function onTouchMove(e) {
-                if (e.cancelable) e.preventDefault(); // Prevent scrolling
+                if (e.cancelable) e.preventDefault();
                 const touch = e.touches[0];
                 handleMove(touch.clientX, touch.clientY);
             }
