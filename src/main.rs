@@ -473,7 +473,14 @@ const HTML_PAGE: &str = r###"
         let wakeLock = null;
         
         const rtcConfig = {
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { 
+                    urls: "turn:standard.relay.metered.ca:443", 
+                    username: "3d056b348f8d1f8ca6f1b1bc", 
+                    credential: "epPJ+cOLwSst9nje" 
+                }
+            ]
         };
 
         const localVideo = document.getElementById('localVideo');
