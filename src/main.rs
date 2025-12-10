@@ -1275,14 +1275,18 @@ const HTML_PAGE: &str = r###"
         function forceStereoAudio(sdp) {
             let sdpLines = sdp.split('\r\n');
             let opusPayload = -1;
+            let rtpmapLineIndex = -1;
+
             for (let i = 0; i < sdpLines.length; i++) {
                 if (sdpLines[i].startsWith('a=rtpmap:')) {
                     if (sdpLines[i].includes('opus/48000')) {
                         opusPayload = sdpLines[i].split(':')[1].split(' ')[0];
+                        rtpmapLineIndex = i;
                         break;
                     }
                 }
             }
+
             if (opusPayload === -1) return sdp;
             
             let fmtpLineIndex = -1;
@@ -1293,11 +1297,13 @@ const HTML_PAGE: &str = r###"
                 }
             }
             
-            if (fmtpLineIndex === -1) return sdp;
-            
-            let fmtpLine = sdpLines[fmtpLineIndex];
-            if (!fmtpLine.includes('stereo=1')) {
-                sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;useinbandfec=1;cbr=1;usedtx=0';
+            if (fmtpLineIndex === -1) {
+                sdpLines.splice(rtpmapLineIndex + 1, 0, 'a=fmtp:' + opusPayload + ' stereo=1;sprop-stereo=1;maxaveragebitrate=510000;useinbandfec=1;cbr=1;usedtx=0');
+            } else {
+                let fmtpLine = sdpLines[fmtpLineIndex];
+                if (!fmtpLine.includes('stereo=1')) {
+                    sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;useinbandfec=1;cbr=1;usedtx=0';
+                }
             }
             return sdpLines.join('\r\n');
         }
@@ -1761,6 +1767,10 @@ const HTML_PAGE: &str = r###"
                     const screenTrack = screenStream.getVideoTracks()[0];
                     const screenAudioTrack = screenStream.getAudioTracks()[0];
                     
+                    if (screenAudioTrack) {
+                        screenAudioTrack.contentHint = "music";
+                    }
+
                     localVideo.srcObject = screenStream;
                     
                     updateLocalAvatar();
