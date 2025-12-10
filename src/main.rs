@@ -329,7 +329,7 @@ const HTML_PAGE: &str = r###"
                             <label class="block text-xs font-medium text-slate-400 mb-1">Avatar</label>
                             <div onclick="document.getElementById('avatarInput').click()" class="w-16 h-16 rounded-full bg-slate-700 border-2 border-slate-600 hover:border-blue-500 cursor-pointer overflow-hidden flex items-center justify-center transition-colors group relative mx-auto">
                                 <img id="avatarPreview" src="" class="hidden w-full h-full object-cover">
-                                <div id="avatarPlaceholder" class="text-2xl">👤</div>
+                                <div id="avatarPlaceholder" class="text-2xl">側</div>
                                 <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs font-bold">Edit</div>
                             </div>
                             <input type="file" id="avatarInput" hidden accept="image/*" onchange="handleAvatarUpload(this)">
@@ -347,6 +347,12 @@ const HTML_PAGE: &str = r###"
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Microphone</label>
                                 <select id="audioSource" onchange="startPreview()" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                                     <option value="">Default</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-400 mb-1">Speaker</label>
+                                <select id="audioOutputSource" onchange="changeAudioOutput(this.value)" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="default">Default</option>
                                 </select>
                             </div>
                             <div>
@@ -388,7 +394,7 @@ const HTML_PAGE: &str = r###"
                     <label class="block text-xs font-medium text-slate-400">Avatar</label>
                     <div onclick="document.getElementById('settingsAvatarInput').click()" class="w-24 h-24 rounded-full bg-slate-700 border-2 border-slate-600 hover:border-blue-500 cursor-pointer overflow-hidden flex items-center justify-center transition-colors group relative">
                         <img id="settingsAvatarPreview" src="" class="hidden w-full h-full object-cover">
-                        <div id="settingsAvatarPlaceholder" class="text-4xl">👤</div>
+                        <div id="settingsAvatarPlaceholder" class="text-4xl">側</div>
                          <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs font-bold">Change</div>
                     </div>
                     <input type="file" id="settingsAvatarInput" hidden accept="image/*" onchange="handleSettingsAvatarUpload(this)">
@@ -403,6 +409,11 @@ const HTML_PAGE: &str = r###"
                      <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Microphone</label>
                         <select id="settingsAudioSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        </select>
+                    </div>
+                     <div>
+                        <label class="block text-xs font-medium text-slate-400 mb-1">Speaker</label>
+                        <select id="settingsAudioOutputSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                         </select>
                     </div>
                     <div>
@@ -458,7 +469,7 @@ const HTML_PAGE: &str = r###"
                         <img id="localAvatarImg" src="" class="absolute inset-0 w-full h-full object-cover filter blur-xl opacity-40 hidden">
                         <div class="relative w-12 h-12 md:w-20 md:h-20 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center overflow-hidden z-10">
                              <img id="localAvatarCenterImg" src="" class="w-full h-full object-cover hidden">
-                             <div id="localAvatarPlaceholder" class="text-xl md:text-3xl">👤</div>
+                             <div id="localAvatarPlaceholder" class="text-xl md:text-3xl">側</div>
                         </div>
                     </div>
                     
@@ -508,6 +519,7 @@ const HTML_PAGE: &str = r###"
         let isConfigured = false;
         let audioContext;
         let wakeLock = null;
+        let currentAudioOutputId = 'default';
         
         let reconnectionAttempts = 0;
         const maxReconnectionAttempts = 5;
@@ -534,6 +546,7 @@ const HTML_PAGE: &str = r###"
         const appLayout = document.getElementById('appLayout');
         const nicknameInput = document.getElementById('nicknameInput');
         const audioSelect = document.getElementById('audioSource');
+        const audioOutputSelect = document.getElementById('audioOutputSource');
         const videoSelect = document.getElementById('videoSource');
         const avatarPreview = document.getElementById('avatarPreview');
         const avatarPlaceholder = document.getElementById('avatarPlaceholder');
@@ -595,6 +608,7 @@ const HTML_PAGE: &str = r###"
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const currentAudio = audioSelect.value;
+                const currentAudioOutput = currentAudioOutputId;
                 const currentVideo = videoSelect.value;
                 
                 const audioTrack = localStream ? localStream.getAudioTracks()[0] : null;
@@ -604,18 +618,27 @@ const HTML_PAGE: &str = r###"
                 const activeVideoId = videoTrack ? videoTrack.getSettings().deviceId : null;
 
                 audioSelect.innerHTML = '';
+                audioOutputSelect.innerHTML = '';
                 videoSelect.innerHTML = '';
                 
                 devices.forEach(device => {
                     const option = document.createElement('option');
                     option.value = device.deviceId;
                     option.text = device.label || `${device.kind} (${device.deviceId.slice(0,5)}...)`;
-                    if (device.kind === 'audioinput') audioSelect.appendChild(option);
+                    if (device.kind === 'audioinput') {
+                        audioSelect.appendChild(option);
+                    } else if (device.kind === 'audiooutput') {
+                        audioOutputSelect.appendChild(option);
+                    }
                     else if (device.kind === 'videoinput') videoSelect.appendChild(option);
                 });
 
                 if (activeAudioId && [...audioSelect.options].some(o => o.value === activeAudioId)) {
                     audioSelect.value = activeAudioId;
+                }
+
+                if (currentAudioOutput && [...audioOutputSelect.options].some(o => o.value === currentAudioOutput)) {
+                    audioOutputSelect.value = currentAudioOutput;
                 }
                 
                 if (activeVideoId && [...videoSelect.options].some(o => o.value === activeVideoId)) {
@@ -631,33 +654,63 @@ const HTML_PAGE: &str = r###"
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const settingsAudio = document.getElementById('settingsAudioSource');
+                const settingsAudioOutput = document.getElementById('settingsAudioOutputSource');
                 const settingsVideo = document.getElementById('settingsVideoSource');
                 
                 const audioTrack = localStream ? localStream.getAudioTracks()[0] : null;
                 const videoTrack = localStream ? localStream.getVideoTracks()[0] : null;
                 
                 const activeAudioId = audioTrack ? audioTrack.getSettings().deviceId : null;
+                const activeAudioOutputId = currentAudioOutputId;
                 const activeVideoId = videoTrack ? videoTrack.getSettings().deviceId : null;
 
                 settingsAudio.innerHTML = '';
+                settingsAudioOutput.innerHTML = '';
                 settingsVideo.innerHTML = '';
                 
                 devices.forEach(device => {
                     const option = document.createElement('option');
                     option.value = device.deviceId;
                     option.text = device.label || `${device.kind} (${device.deviceId.slice(0,5)}...)`;
-                    if (device.kind === 'audioinput') settingsAudio.appendChild(option);
+                    if (device.kind === 'audioinput') {
+                        settingsAudio.appendChild(option);
+                    } else if (device.kind === 'audiooutput') {
+                        settingsAudioOutput.appendChild(option);
+                    }
                     else if (device.kind === 'videoinput') settingsVideo.appendChild(option);
                 });
                 
                  if (activeAudioId && [...settingsAudio.options].some(o => o.value === activeAudioId)) {
                     settingsAudio.value = activeAudioId;
                 }
+
+                if (activeAudioOutputId && [...settingsAudioOutput.options].some(o => o.value === activeAudioOutputId)) {
+                    settingsAudioOutput.value = activeAudioOutputId;
+                }
                 
                 if (activeVideoId && [...settingsVideo.options].some(o => o.value === activeVideoId)) {
                     settingsVideo.value = activeVideoId;
                 }
             } catch (e) { console.error(e); }
+        }
+
+        async function changeAudioOutput(deviceId) {
+            currentAudioOutputId = deviceId;
+            const elements = document.querySelectorAll('video, audio');
+            for (const el of elements) {
+                await attachSinkId(el, deviceId);
+            }
+            savePreferences();
+        }
+
+        async function attachSinkId(element, sinkId) {
+            if (typeof element.setSinkId === 'function') {
+                try {
+                    await element.setSinkId(sinkId);
+                } catch (e) {
+                    console.warn("Failed to set audio output device", e);
+                }
+            }
         }
 
         async function switchMediaStream(audioId, videoId) {
@@ -799,6 +852,9 @@ const HTML_PAGE: &str = r###"
                         avatarPreview.classList.remove('hidden');
                         avatarPlaceholder.classList.add('hidden');
                     }
+                    if (data.audioOutputId) {
+                        currentAudioOutputId = data.audioOutputId;
+                    }
                 } catch (e) { console.error("Load pref error", e); }
             }
         }
@@ -806,7 +862,8 @@ const HTML_PAGE: &str = r###"
         function savePreferences() {
             localStorage.setItem('iroh_profile', JSON.stringify({
                 nickname: userNickname,
-                avatar: userAvatar
+                avatar: userAvatar,
+                audioOutputId: currentAudioOutputId
             }));
         }
 
@@ -1185,7 +1242,7 @@ const HTML_PAGE: &str = r###"
                    } else {
                        avatarLayer.innerHTML = `
                            <div class="avatar-center" style="background:transparent; border:none;">
-                               <div class="text-6xl mb-2">👤</div>
+                               <div class="text-6xl mb-2">側</div>
                            </div>
                        `;
                    }
@@ -1252,6 +1309,7 @@ const HTML_PAGE: &str = r###"
                     vid.id = `vid-${userId}`;
                     vid.autoplay = true;
                     vid.playsInline = true; 
+                    attachSinkId(vid, currentAudioOutputId);
                     vid.srcObject = new MediaStream();
                     
                     const avatarLayer = document.createElement('div');
@@ -1267,7 +1325,7 @@ const HTML_PAGE: &str = r###"
                     } else {
                         avatarLayer.innerHTML = `
                             <div class="avatar-center" style="background:transparent; border:none;">
-                                <div class="text-6xl mb-2">👤</div>
+                                <div class="text-6xl mb-2">側</div>
                             </div>
                         `;
                     }
@@ -1344,6 +1402,7 @@ const HTML_PAGE: &str = r###"
                         audEl.srcObject = screenStream;
                         audEl.id = `aud-screen-${userId}`;
                         audEl.autoplay = true;
+                        attachSinkId(audEl, currentAudioOutputId);
                         container.appendChild(audEl);
                         
                         const row = document.createElement('div');
@@ -1809,6 +1868,7 @@ const HTML_PAGE: &str = r###"
 
         async function saveSettings() {
             const newAudio = document.getElementById('settingsAudioSource').value;
+            const newAudioOutput = document.getElementById('settingsAudioOutputSource').value;
             const newVideo = document.getElementById('settingsVideoSource').value;
             
             const currentAudioTrack = localStream ? localStream.getAudioTracks()[0] : null;
@@ -1819,6 +1879,10 @@ const HTML_PAGE: &str = r###"
 
             if (newAudio !== currentAudioId || newVideo !== currentVideoId) {
                 await switchMediaStream(newAudio, newVideo);
+            }
+
+            if (newAudioOutput !== currentAudioOutputId) {
+                await changeAudioOutput(newAudioOutput);
             }
 
             userNickname = settingsNicknameInput.value.trim() || "Guest";
@@ -2220,7 +2284,3 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
         }
     }
 }
-
-
-
-
