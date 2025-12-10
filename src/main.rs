@@ -573,9 +573,11 @@ const HTML_PAGE: &str = r###"
                 console.warn("Device access failed", e);
                 try {
                     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    updatePreviewButtons();
                     await populateDeviceList();
                 } catch(e2) {
                      console.error("Audio failed too", e2);
+                     updatePreviewButtons();
                 }
             }
         }
@@ -843,6 +845,7 @@ const HTML_PAGE: &str = r###"
         async function startPreview() {
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
             }
 
             const audioSource = audioSelect.value;
@@ -864,36 +867,65 @@ const HTML_PAGE: &str = r###"
                  try {
                     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                     previewVideo.srcObject = null;
+                    updatePreviewButtons();
                 } catch(e2) {
-                    
+                    updatePreviewButtons();
                 }
             }
         }
 
         function updatePreviewButtons() {
-             if (!localStream) return;
-             const audioTrack = localStream.getAudioTracks()[0];
-             const videoTrack = localStream.getVideoTracks()[0];
-             
              const btnMic = document.getElementById('btnPreviewMic');
              const btnCam = document.getElementById('btnPreviewCam');
 
-             if (audioTrack && !audioTrack.enabled) {
-                 btnMic.classList.add('bg-red-500', 'hover:bg-red-600');
-                 btnMic.innerText = "Unmute";
+             if (!localStream) {
+                 btnMic.disabled = true;
+                 btnMic.classList.add('opacity-50', 'cursor-not-allowed');
+                 btnMic.innerText = "No Mic";
+                 
+                 btnCam.disabled = true;
+                 btnCam.classList.add('opacity-50', 'cursor-not-allowed');
+                 btnCam.innerText = "No Cam";
+                 document.getElementById('previewPlaceholder').style.display = 'flex';
+                 return;
+             }
+             
+             const audioTrack = localStream.getAudioTracks()[0];
+             const videoTrack = localStream.getVideoTracks()[0];
+
+             if (!audioTrack) {
+                 btnMic.disabled = true;
+                 btnMic.classList.add('opacity-50', 'cursor-not-allowed');
+                 btnMic.innerText = "No Mic";
              } else {
-                 btnMic.classList.remove('bg-red-500', 'hover:bg-red-600');
-                 btnMic.innerText = "Mute";
+                 btnMic.disabled = false;
+                 btnMic.classList.remove('opacity-50', 'cursor-not-allowed');
+                 if (!audioTrack.enabled) {
+                     btnMic.classList.add('bg-red-500', 'hover:bg-red-600');
+                     btnMic.innerText = "Unmute";
+                 } else {
+                     btnMic.classList.remove('bg-red-500', 'hover:bg-red-600');
+                     btnMic.innerText = "Mute";
+                 }
              }
 
-             if (videoTrack && !videoTrack.enabled) {
-                 btnCam.classList.add('bg-red-500', 'hover:bg-red-600');
-                 btnCam.innerText = "Start Cam";
+             if (!videoTrack) {
+                 btnCam.disabled = true;
+                 btnCam.classList.add('opacity-50', 'cursor-not-allowed');
+                 btnCam.innerText = "No Cam";
                  document.getElementById('previewPlaceholder').style.display = 'flex';
              } else {
-                 btnCam.classList.remove('bg-red-500', 'hover:bg-red-600');
-                 btnCam.innerText = "Stop Cam";
-                 if(videoTrack) document.getElementById('previewPlaceholder').style.display = 'none';
+                 btnCam.disabled = false;
+                 btnCam.classList.remove('opacity-50', 'cursor-not-allowed');
+                 if (!videoTrack.enabled) {
+                     btnCam.classList.add('bg-red-500', 'hover:bg-red-600');
+                     btnCam.innerText = "Start Cam";
+                     document.getElementById('previewPlaceholder').style.display = 'flex';
+                 } else {
+                     btnCam.classList.remove('bg-red-500', 'hover:bg-red-600');
+                     btnCam.innerText = "Stop Cam";
+                     document.getElementById('previewPlaceholder').style.display = 'none';
+                 }
              }
         }
 
@@ -941,19 +973,29 @@ const HTML_PAGE: &str = r###"
             updateLocalAvatar();
             const btnMic = document.getElementById('btnMic');
             const btnCam = document.getElementById('btnCam');
+
+            const micOffSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
+            const camOffSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M21 21l-3.5-3.5m-2-2l-2-2m-2-2l-2-2m-2-2l-3.5-3.5"></path><path d="M15 7h5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-5"></path><path d="M4 8v8a2 2 0 0 0 2 2h4.5"></path></svg>`;
             
              if (localStream) {
                 const audioTrack = localStream.getAudioTracks()[0];
                 const videoTrack = localStream.getVideoTracks()[0];
                 
-                if (audioTrack && !audioTrack.enabled) {
+                if (!audioTrack || !audioTrack.enabled) {
                      btnMic.classList.add('active-red');
+                     btnMic.innerHTML = micOffSvg;
                 }
-                if (videoTrack && !videoTrack.enabled) {
+                if (!videoTrack || !videoTrack.enabled) {
                      btnCam.classList.add('active-red');
+                     btnCam.innerHTML = camOffSvg;
                 }
                 
                 setupAudioMonitor(localStream, 'local');
+            } else {
+                 btnMic.classList.add('active-red');
+                 btnMic.innerHTML = micOffSvg;
+                 btnCam.classList.add('active-red');
+                 btnCam.innerHTML = camOffSvg;
             }
 
             connectWs();
