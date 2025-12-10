@@ -1768,7 +1768,7 @@ const HTML_PAGE: &str = r###"
                         video: { cursor: true },
                         systemAudio: "include",
                         audio: {
-                            echoCancellation: false,
+                            echoCancellation: true,
                             noiseSuppression: false,
                             autoGainControl: false,
                             channelCount: 2,
