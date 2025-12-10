@@ -1272,9 +1272,42 @@ const HTML_PAGE: &str = r###"
             else remoteGrid.classList.add('grid-cols-4');
         }
 
+        function forceStereoAudio(sdp) {
+            let sdpLines = sdp.split('\r\n');
+            let opusPayload = -1;
+            for (let i = 0; i < sdpLines.length; i++) {
+                if (sdpLines[i].startsWith('a=rtpmap:')) {
+                    if (sdpLines[i].includes('opus/48000')) {
+                        opusPayload = sdpLines[i].split(':')[1].split(' ')[0];
+                        break;
+                    }
+                }
+            }
+            if (opusPayload === -1) return sdp;
+            
+            let fmtpLineIndex = -1;
+            for (let i = 0; i < sdpLines.length; i++) {
+                if (sdpLines[i].startsWith('a=fmtp:' + opusPayload)) {
+                    fmtpLineIndex = i;
+                    break;
+                }
+            }
+            
+            if (fmtpLineIndex === -1) return sdp;
+            
+            let fmtpLine = sdpLines[fmtpLineIndex];
+            if (!fmtpLine.includes('stereo=1')) {
+                sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1';
+            }
+            return sdpLines.join('\r\n');
+        }
+
         function negotiate(userId, pc) {
             pc.createOffer()
-                .then(offer => pc.setLocalDescription(offer))
+                .then(offer => {
+                    offer.sdp = forceStereoAudio(offer.sdp);
+                    return pc.setLocalDescription(offer);
+                })
                 .then(() => sendSignal(userId, { type: 'offer', sdp: pc.localDescription }))
                 .catch(e => console.error("Negotiation error", e));
         }
@@ -1488,6 +1521,7 @@ const HTML_PAGE: &str = r###"
                 if (data.type === 'offer') {
                     await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
                     const answer = await pc.createAnswer();
+                    answer.sdp = forceStereoAudio(answer.sdp);
                     await pc.setLocalDescription(answer);
                     sendSignal(userId, { type: 'answer', sdp: answer });
                 } else if (data.type === 'answer') {
@@ -1755,7 +1789,7 @@ const HTML_PAGE: &str = r###"
 
                             const params = sender.getParameters();
                             if (!params.encodings) params.encodings = [{}];
-                            params.encodings[0].maxBitrate = 256000;
+                            params.encodings[0].maxBitrate = 512000;
                             sender.setParameters(params).catch(e => console.warn(e));
 
                             shouldNegotiate = true;
