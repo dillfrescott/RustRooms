@@ -424,6 +424,9 @@ const HTML_PAGE: &str = r###"
             <div class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-full flex items-center gap-2">
                 <div id="connectionDot" class="connection-dot"></div>
                 <span id="statusText" class="text-xs md:text-sm font-medium text-slate-200">Waiting...</span>
+                <button id="btnReconnect" onclick="retryConnection()" class="hidden ml-2 p-1.5 rounded-full hover:bg-slate-700 text-slate-400 hover:text-white transition-all" title="Retry Connection">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+                </button>
             </div>
 
             <div id="btnCopy" class="glass-panel px-3 py-1.5 md:px-4 md:py-2 rounded-full cursor-pointer hover:bg-slate-700/50 transition-all flex items-center gap-2" onclick="copyLink()">
@@ -503,6 +506,10 @@ const HTML_PAGE: &str = r###"
         let isConfigured = false;
         let audioContext;
         let wakeLock = null;
+        
+        let reconnectionAttempts = 0;
+        const maxReconnectionAttempts = 5;
+        const reconnectionDelay = 3000;
         
         const rtcConfig = {
             iceServers: [
@@ -1025,110 +1032,139 @@ const HTML_PAGE: &str = r###"
             updateStatus('connecting', 'Connecting...');
             ws = new WebSocket(wsUrl);
             
-            ws.onopen = () => {
-                updateStatus('connected', 'Connected');
-                const camEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
-                const screenEnabled = !!screenStream;
-                const screenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
-                const myId = getPersistentId();
-                ws.send(JSON.stringify({ 
-                    type: "join", 
-                    userId: myId,
-                    data: { 
-                        nickname: userNickname,
-                        avatar: userAvatar,
-                        camEnabled: camEnabled,
-                        screenEnabled: screenEnabled,
-                        screenAudio: screenHasAudio
-                    } 
-                }));
-                checkEmpty();
-            };
-
-            ws.onmessage = async (event) => {
-                const msg = JSON.parse(event.data);
-                
-                switch (msg.type) {
-                    case 'user-joined':
-                        if (peers[msg.userId]) {
-                            removePeer(msg.userId);
-                        }
-
-                        if (msg.data.camEnabled !== undefined) {
-                            peerCamStatus[msg.userId] = msg.data.camEnabled;
-                        }
-                        if (msg.data.screenEnabled !== undefined) {
-                            peerScreenStatus[msg.userId] = msg.data.screenEnabled;
-                        }
-                        initPeer(msg.userId, true, msg.data?.nickname, msg.data?.avatar);
-                        
-                        const myCamEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
-                        const myScreenEnabled = !!screenStream;
-                        const myScreenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
-                        ws.send(JSON.stringify({
-                            type: 'identify',
-                            target: msg.userId,
-                            data: { 
-                                nickname: userNickname, 
-                                avatar: userAvatar,
-                                camEnabled: myCamEnabled,
-                                screenEnabled: myScreenEnabled,
-                                screenAudio: myScreenHasAudio
-                            }
-                        }));
-                        break;
-                    case 'user-left':
-                        removePeer(msg.userId);
-                        delete peerCamStatus[msg.userId];
-                        delete peerScreenStatus[msg.userId];
-                        break;
-                    case 'user-update':
-                         updatePeerInfo(msg.userId, msg.data.nickname, msg.data.avatar);
-                        break;
-                    case 'cam-toggle':
-                        if (msg.data && msg.data.enabled !== undefined) {
-                            peerCamStatus[msg.userId] = msg.data.enabled;
-                        }
-                        break;
-                    case 'screen-toggle':
-                        if (msg.data && msg.data.enabled !== undefined) {
-                            peerScreenStatus[msg.userId] = msg.data.enabled;
-                            const v = document.getElementById(`vid-${msg.userId}`);
-                            if (v) v.style.objectFit = msg.data.enabled ? 'contain' : 'contain';
-
-                            if (!msg.data.enabled || !msg.data.hasAudio) {
-                                const row = document.getElementById(`vol-row-screen-${msg.userId}`);
-                                if (row) row.remove();
-                                const aud = document.getElementById(`aud-screen-${msg.userId}`);
-                                if (aud) aud.remove();
-                            }
-                        }
-                        break;
-                    case 'identify':
-                        if (msg.data.camEnabled !== undefined) {
-                            peerCamStatus[msg.userId] = msg.data.camEnabled;
-                        }
-                        if (msg.data.screenEnabled !== undefined) {
-                            peerScreenStatus[msg.userId] = msg.data.screenEnabled;
-                        }
-                        if (peers[msg.userId]) {
-                            updatePeerInfo(msg.userId, msg.data.nickname, msg.data.avatar);
-                        } else {
-                            initPeer(msg.userId, false, msg.data.nickname, msg.data.avatar);
-                        }
-                        break;
-                    case 'signal':
-                        handleSignal(msg.userId, msg.data);
-                        break;
-                }
-            };
+                        ws.onopen = () => {
+                            reconnectionAttempts = 0;
+                            updateStatus('connected', 'Connected');
+                            const camEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
+                            const screenEnabled = !!screenStream;
+                            const screenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
+                            const myId = getPersistentId();
+                            ws.send(JSON.stringify({ 
+                                type: "join", 
+                                userId: myId,
+                                data: { 
+                                    nickname: userNickname,
+                                    avatar: userAvatar,
+                                    camEnabled: camEnabled,
+                                    screenEnabled: screenEnabled,
+                                    screenAudio: screenHasAudio
+                                }
+                            }));
+                            checkEmpty();
+                        };
             
-            ws.onclose = () => {
-                updateStatus('connecting', 'Reconnecting...');
-                setTimeout(connectWs, 3000);
-            };
-        }
+                        ws.onmessage = async (event) => {
+                            const msg = JSON.parse(event.data);
+                            
+                            switch (msg.type) {
+                                case 'user-joined':
+                                    if (peers[msg.userId]) {
+                                        removePeer(msg.userId);
+                                    }
+            
+                                    if (msg.data.camEnabled !== undefined) {
+                                        peerCamStatus[msg.userId] = msg.data.camEnabled;
+                                    }
+                                    if (msg.data.screenEnabled !== undefined) {
+                                        peerScreenStatus[msg.userId] = msg.data.screenEnabled;
+                                    }
+                                    initPeer(msg.userId, true, msg.data?.nickname, msg.data?.avatar);
+                                    
+                                    const myCamEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
+                                    const myScreenEnabled = !!screenStream;
+                                    const myScreenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
+                                    ws.send(JSON.stringify({
+                                        type: 'identify',
+                                        target: msg.userId,
+                                        data: { 
+                                            nickname: userNickname, 
+                                            avatar: userAvatar,
+                                            camEnabled: myCamEnabled,
+                                            screenEnabled: myScreenEnabled,
+                                            screenAudio: myScreenHasAudio
+                                        }
+                                    }));
+                                    break;
+                                case 'user-left':
+                                    removePeer(msg.userId);
+                                    delete peerCamStatus[msg.userId];
+                                    delete peerScreenStatus[msg.userId];
+                                    break;
+                                case 'user-update':
+                                     updatePeerInfo(msg.userId, msg.data.nickname, msg.data.avatar);
+                                    break;
+                                case 'cam-toggle':
+                                    if (msg.data && msg.data.enabled !== undefined) {
+                                        peerCamStatus[msg.userId] = msg.data.enabled;
+                                    }
+                                    break;
+                                case 'screen-toggle':
+                                    if (msg.data && msg.data.enabled !== undefined) {
+                                        peerScreenStatus[msg.userId] = msg.data.enabled;
+                                        const v = document.getElementById(`vid-${msg.userId}`);
+                                        if (v) v.style.objectFit = msg.data.enabled ? 'contain' : 'contain';
+            
+                                        if (!msg.data.enabled || !msg.data.hasAudio) {
+                                            const row = document.getElementById(`vol-row-screen-${msg.userId}`);
+                                            if (row) row.remove();
+                                            const aud = document.getElementById(`aud-screen-${msg.userId}`);
+                                            if (aud) aud.remove();
+                                        }
+                                    }
+                                    break;
+                                case 'identify':
+                                    if (msg.data.camEnabled !== undefined) {
+                                        peerCamStatus[msg.userId] = msg.data.camEnabled;
+                                    }
+                                    if (msg.data.screenEnabled !== undefined) {
+                                        peerScreenStatus[msg.userId] = msg.data.enabled;
+                                    }
+                                    if (peers[msg.userId]) {
+                                        updatePeerInfo(msg.userId, msg.data.nickname, msg.data.avatar);
+                                    } else {
+                                        initPeer(msg.userId, false, msg.data.nickname, msg.data.avatar);
+                                    }
+                                    break;
+                                case 'signal':
+                                    handleSignal(msg.userId, msg.data);
+                                    break;
+                            }
+                        };
+                        
+                        ws.onclose = () => {
+                            reconnectionAttempts++;
+                            if (reconnectionAttempts >= maxReconnectionAttempts) {
+                                updateStatus('disconnected', 'Disconnected');
+                                const btn = document.getElementById('btnReconnect');
+                                if (btn) btn.classList.remove('hidden');
+                                console.error('WebSocket disconnected after multiple retries. No further attempts will be made.');
+                            } else {
+                                updateStatus('connecting', `Reconnecting... (Attempt ${reconnectionAttempts}/${maxReconnectionAttempts})`);
+                                setTimeout(connectWs, reconnectionDelay);
+                            }
+                        };
+            
+                        ws.onerror = (error) => {
+                            console.error('WebSocket Error:', error);
+                        };
+                    }
 
+        function retryConnection() {
+            const btn = document.getElementById('btnReconnect');
+            if (btn) {
+                btn.classList.add('text-green-500', 'bg-green-500/10');
+                btn.classList.remove('text-slate-400', 'hover:text-white', 'hover:bg-slate-700');
+                
+                setTimeout(() => {
+                    btn.classList.add('hidden');
+                    btn.classList.remove('text-green-500', 'bg-green-500/10');
+                    btn.classList.add('text-slate-400', 'hover:text-white', 'hover:bg-slate-700');
+                    
+                    reconnectionAttempts = 0;
+                    connectWs();
+                }, 300);
+            }
+        }
         function updatePeerInfo(userId, nickname, avatar) {
             const wrapper = document.getElementById(`wrapper-${userId}`);
             if (wrapper) {
