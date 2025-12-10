@@ -13,3 +13,7 @@ tower-http = { version = "*", features = ["fs", "trace"] }
 tracing = "*"
 tracing-subscriber = "*"
 futures = "*"
+turn = "0.11.0"
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+webrtc-util = "0.12.0"

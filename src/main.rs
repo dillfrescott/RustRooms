@@ -1,3 +1,5 @@
+mod turn_server;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -513,11 +515,11 @@ const HTML_PAGE: &str = r###"
         
         const rtcConfig = {
             iceServers: [
-                { urls: "stun:stun.l.google.com:19302" },
+                { urls: `stun:${window.location.hostname}:3478` },
                 { 
-                    urls: "turn:standard.relay.metered.ca:443", 
-                    username: "3d056b348f8d1f8ca6f1b1bc", 
-                    credential: "epPJ+cOLwSst9nje" 
+                    urls: `turn:${window.location.hostname}:3478`, 
+                    username: "rustrooms", 
+                    credential: "rustrooms" 
                 }
             ]
         };
@@ -2047,6 +2049,12 @@ async fn main() {
         .route("/room/{id}", get(serve_room))
         .route("/ws/{id}", get(ws_handler))
         .with_state(rooms);
+
+    tokio::spawn(async {
+        if let Err(e) = turn_server::start(3478).await {
+            eprintln!("failed to start TURN server: {}", e);
+        }
+    });
 
     let port = 3000;
     let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
