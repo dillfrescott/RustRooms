@@ -1706,7 +1706,7 @@ const HTML_PAGE: &str = r###"
                     screenStream = await navigator.mediaDevices.getDisplayMedia({ 
                         video: { cursor: true }, 
                         audio: {
-                            echoCancellation: true,
+                            echoCancellation: false,
                             noiseSuppression: false,
                             autoGainControl: false,
                             channelCount: 2,
