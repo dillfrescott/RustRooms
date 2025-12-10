@@ -329,7 +329,7 @@ const HTML_PAGE: &str = r###"
                             <label class="block text-xs font-medium text-slate-400 mb-1">Avatar</label>
                             <div onclick="document.getElementById('avatarInput').click()" class="w-16 h-16 rounded-full bg-slate-700 border-2 border-slate-600 hover:border-blue-500 cursor-pointer overflow-hidden flex items-center justify-center transition-colors group relative mx-auto">
                                 <img id="avatarPreview" src="" class="hidden w-full h-full object-cover">
-                                <div id="avatarPlaceholder" class="text-2xl">側</div>
+                                <div id="avatarPlaceholder" class="text-2xl">👤</div>
                                 <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs font-bold">Edit</div>
                             </div>
                             <input type="file" id="avatarInput" hidden accept="image/*" onchange="handleAvatarUpload(this)">
@@ -394,7 +394,7 @@ const HTML_PAGE: &str = r###"
                     <label class="block text-xs font-medium text-slate-400">Avatar</label>
                     <div onclick="document.getElementById('settingsAvatarInput').click()" class="w-24 h-24 rounded-full bg-slate-700 border-2 border-slate-600 hover:border-blue-500 cursor-pointer overflow-hidden flex items-center justify-center transition-colors group relative">
                         <img id="settingsAvatarPreview" src="" class="hidden w-full h-full object-cover">
-                        <div id="settingsAvatarPlaceholder" class="text-4xl">側</div>
+                        <div id="settingsAvatarPlaceholder" class="text-4xl">👤</div>
                          <div class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs font-bold">Change</div>
                     </div>
                     <input type="file" id="settingsAvatarInput" hidden accept="image/*" onchange="handleSettingsAvatarUpload(this)">
@@ -469,7 +469,7 @@ const HTML_PAGE: &str = r###"
                         <img id="localAvatarImg" src="" class="absolute inset-0 w-full h-full object-cover filter blur-xl opacity-40 hidden">
                         <div class="relative w-12 h-12 md:w-20 md:h-20 rounded-full bg-slate-700 border-2 border-slate-600 flex items-center justify-center overflow-hidden z-10">
                              <img id="localAvatarCenterImg" src="" class="w-full h-full object-cover hidden">
-                             <div id="localAvatarPlaceholder" class="text-xl md:text-3xl">側</div>
+                             <div id="localAvatarPlaceholder" class="text-xl md:text-3xl">👤</div>
                         </div>
                     </div>
                     
@@ -1242,7 +1242,7 @@ const HTML_PAGE: &str = r###"
                    } else {
                        avatarLayer.innerHTML = `
                            <div class="avatar-center" style="background:transparent; border:none;">
-                               <div class="text-6xl mb-2">側</div>
+                               <div class="text-6xl mb-2">👤</div>
                            </div>
                        `;
                    }
@@ -1325,7 +1325,7 @@ const HTML_PAGE: &str = r###"
                     } else {
                         avatarLayer.innerHTML = `
                             <div class="avatar-center" style="background:transparent; border:none;">
-                                <div class="text-6xl mb-2">側</div>
+                                <div class="text-6xl mb-2">👤</div>
                             </div>
                         `;
                     }
