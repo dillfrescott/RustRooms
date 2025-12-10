@@ -1706,9 +1706,12 @@ const HTML_PAGE: &str = r###"
                     screenStream = await navigator.mediaDevices.getDisplayMedia({ 
                         video: { cursor: true }, 
                         audio: {
-                            echoCancellation: false,
+                            echoCancellation: true,
                             noiseSuppression: false,
-                            autoGainControl: false
+                            autoGainControl: false,
+                            channelCount: 2,
+                            sampleRate: 48000,
+                            sampleSize: 16
                         } 
                     });
                     const screenTrack = screenStream.getVideoTracks()[0];
@@ -1743,11 +1746,18 @@ const HTML_PAGE: &str = r###"
                         }
 
                         if (screenAudioTrack) {
+                            let sender;
                             if (localStream) {
-                                pc.addTrack(screenAudioTrack, localStream);
+                                sender = pc.addTrack(screenAudioTrack, localStream);
                             } else {
-                                pc.addTrack(screenAudioTrack, screenStream);
+                                sender = pc.addTrack(screenAudioTrack, screenStream);
                             }
+
+                            const params = sender.getParameters();
+                            if (!params.encodings) params.encodings = [{}];
+                            params.encodings[0].maxBitrate = 256000;
+                            sender.setParameters(params).catch(e => console.warn(e));
+
                             shouldNegotiate = true;
                         }
                         
