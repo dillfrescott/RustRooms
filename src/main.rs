@@ -291,6 +291,37 @@ const HTML_PAGE: &str = r###"
             }
         }
 
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #22c55e;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #22c55e;
+        }
+        .toggle-label {
+            width: 32px;
+            height: 18px;
+            background-color: #475569;
+            border-radius: 9999px;
+            position: relative;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in;
+        }
+        .toggle-label:after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            background-color: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s ease-in;
+        }
+        .toggle-checkbox:checked + .toggle-label:after {
+            transform: translateX(100%);
+        }
+
     </style>
 </head>
 <body class="flex flex-col h-screen w-screen overflow-hidden bg-slate-900">
@@ -1176,7 +1207,7 @@ const HTML_PAGE: &str = r###"
                                         peerCamStatus[msg.userId] = msg.data.camEnabled;
                                     }
                                     if (msg.data.screenEnabled !== undefined) {
-                                        peerScreenStatus[msg.userId] = msg.data.enabled;
+                                        peerScreenStatus[msg.userId] = msg.data.screenEnabled;
                                     }
                                     if (peers[msg.userId]) {
                                         updatePeerInfo(msg.userId, msg.data.nickname, msg.data.avatar);
@@ -1327,7 +1358,28 @@ const HTML_PAGE: &str = r###"
             peers[userId] = pc;
 
             if (localStream) {
-                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+                localStream.getAudioTracks().forEach(track => pc.addTrack(track, localStream));
+            }
+
+            if (screenStream) {
+                const screenTrack = screenStream.getVideoTracks()[0];
+                if (screenTrack) {
+                    if (localStream) {
+                        pc.addTrack(screenTrack, localStream);
+                    } else {
+                        pc.addTrack(screenTrack, screenStream);
+                    }
+                }
+                const screenAudioTrack = screenStream.getAudioTracks()[0];
+                if (screenAudioTrack) {
+                    const sender = pc.addTrack(screenAudioTrack, screenStream);
+                    const params = sender.getParameters();
+                    if (!params.encodings) params.encodings = [{}];
+                    params.encodings[0].maxBitrate = 512000;
+                    sender.setParameters(params).catch(e => console.warn(e));
+                }
+            } else if (localStream) {
+                localStream.getVideoTracks().forEach(track => pc.addTrack(track, localStream));
             }
 
             if (!localStream || localStream.getVideoTracks().length === 0) {
@@ -1453,11 +1505,25 @@ const HTML_PAGE: &str = r###"
                             </button>
                             <input type="range" min="0" max="1" step="0.05" value="1" oninput="setVolume('${userId}', 'screen', this.value)">
                         `;
+                        
+                        const proRow = document.createElement('div');
+                        proRow.className = 'vol-row justify-end pr-1 mt-1';
+                        proRow.id = `pro-audio-row-${userId}`;
+                        proRow.innerHTML = `
+                             <label class="text-[10px] text-slate-300 mr-2 cursor-pointer" for="pro-toggle-${userId}">Pro Audio</label>
+                             <div class="relative inline-block w-8 mr-2 align-middle select-none transition duration-200 ease-in">
+                                <input type="checkbox" name="toggle" id="pro-toggle-${userId}" class="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 appearance-none cursor-pointer hidden" checked onclick="toggleProAudio('${userId}', this.checked)"/>
+                                <label for="pro-toggle-${userId}" class="toggle-label block overflow-hidden h-4 rounded-full bg-gray-300 cursor-pointer"></label>
+                            </div>
+                        `;
+                        
                         volControls.appendChild(row);
+                        volControls.appendChild(proRow);
                         
                         event.track.onended = () => {
                             audEl.remove();
                             row.remove();
+                            proRow.remove();
                         };
                     }
                 }
@@ -1520,6 +1586,25 @@ const HTML_PAGE: &str = r###"
         }
 
         async function handleSignal(userId, data) {
+            if (data.type === 'pro-audio-req') {
+                 if (screenStream) {
+                     const audioTrack = screenStream.getAudioTracks()[0];
+                     if (audioTrack) {
+                         const constraints = data.enabled 
+                            ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+                            : { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+                         
+                         try {
+                             await audioTrack.applyConstraints(constraints);
+                             console.log("Applied audio constraints", constraints);
+                         } catch (e) {
+                             console.warn("Failed to apply audio constraints", e);
+                         }
+                     }
+                 }
+                 return;
+            }
+
             if (!peers[userId]) initPeer(userId, false, "Unknown", null); 
             const pc = peers[userId];
 
@@ -1613,6 +1698,19 @@ const HTML_PAGE: &str = r###"
             }
             if (el) {
                 el.volume = val;
+            }
+        }
+
+        window.toggleProAudio = function(userId, enabled) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'signal',
+                    target: userId,
+                    data: {
+                        type: 'pro-audio-req',
+                        enabled: enabled
+                    }
+                }));
             }
         }
 
