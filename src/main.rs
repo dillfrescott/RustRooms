@@ -1297,7 +1297,7 @@ const HTML_PAGE: &str = r###"
             
             let fmtpLine = sdpLines[fmtpLineIndex];
             if (!fmtpLine.includes('stereo=1')) {
-                sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1';
+                sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;useinbandfec=1;cbr=1';
             }
             return sdpLines.join('\r\n');
         }
@@ -1743,9 +1743,16 @@ const HTML_PAGE: &str = r###"
                             echoCancellation: false,
                             noiseSuppression: false,
                             autoGainControl: false,
+                            googAutoGainControl: false,
+                            googExperimentalAutoGainControl: false,
+                            googNoiseSuppression: false,
+                            googExperimentalNoiseSuppression: false,
+                            googHighpassFilter: false,
+                            googEchoCancellation: false,
                             channelCount: 2,
                             sampleRate: 48000,
-                            sampleSize: 16
+                            sampleSize: 16,
+                            systemAudio: "include"
                         } 
                     });
                     const screenTrack = screenStream.getVideoTracks()[0];
