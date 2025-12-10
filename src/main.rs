@@ -1297,7 +1297,7 @@ const HTML_PAGE: &str = r###"
             
             let fmtpLine = sdpLines[fmtpLineIndex];
             if (!fmtpLine.includes('stereo=1')) {
-                sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;useinbandfec=1;cbr=1';
+                sdpLines[fmtpLineIndex] = fmtpLine + ';stereo=1;sprop-stereo=1;maxaveragebitrate=510000;useinbandfec=1;cbr=1;usedtx=0';
             }
             return sdpLines.join('\r\n');
         }
@@ -1738,7 +1738,8 @@ const HTML_PAGE: &str = r###"
             } else {
                 try {
                     screenStream = await navigator.mediaDevices.getDisplayMedia({ 
-                        video: { cursor: true }, 
+                        video: { cursor: true },
+                        systemAudio: "include",
                         audio: {
                             echoCancellation: false,
                             noiseSuppression: false,
@@ -1749,10 +1750,12 @@ const HTML_PAGE: &str = r###"
                             googExperimentalNoiseSuppression: false,
                             googHighpassFilter: false,
                             googEchoCancellation: false,
+                            googExperimentalEchoCancellation: false,
+                            googAutoGainControl2: false,
+                            googTypingNoiseDetection: false,
                             channelCount: 2,
                             sampleRate: 48000,
-                            sampleSize: 16,
-                            systemAudio: "include"
+                            sampleSize: 16
                         } 
                     });
                     const screenTrack = screenStream.getVideoTracks()[0];
@@ -1787,12 +1790,7 @@ const HTML_PAGE: &str = r###"
                         }
 
                         if (screenAudioTrack) {
-                            let sender;
-                            if (localStream) {
-                                sender = pc.addTrack(screenAudioTrack, localStream);
-                            } else {
-                                sender = pc.addTrack(screenAudioTrack, screenStream);
-                            }
+                            let sender = pc.addTrack(screenAudioTrack, screenStream);
 
                             const params = sender.getParameters();
                             if (!params.encodings) params.encodings = [{}];
