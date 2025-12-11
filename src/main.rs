@@ -293,12 +293,12 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             background: rgba(15, 23, 42, 0.95);
             border-top: 1px solid rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
-            padding-bottom: calc(env(safe-area-inset-bottom) + 40px);
+            padding-bottom: env(safe-area-inset-bottom);
         }
 
         @media (min-width: 768px) {
             .taskbar {
-                padding-bottom: calc(env(safe-area-inset-bottom) + 20px);
+                padding-bottom: env(safe-area-inset-bottom);
             }
         }
 
