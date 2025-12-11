@@ -303,6 +303,21 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             gap: 8px;
         }
 
+        .mic-meter {
+            width: 100%;
+            height: 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+        .mic-bar {
+            height: 100%;
+            width: 0%;
+            background: #22c55e;
+            transition: width 0.05s linear;
+        }
+
         /* Taskbar style footer */
         .taskbar {
             background: rgba(15, 23, 42, 0.95);
@@ -374,12 +389,18 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                                 <select id="audioSource" onchange="startPreview()" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                                     <option value="">Default</option>
                                 </select>
+                                <div class="mic-meter"><div id="setupMicBar" class="mic-bar"></div></div>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Speaker</label>
-                                <select id="audioOutputSource" onchange="changeAudioOutput(this.value)" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                                    <option value="default">Default</option>
-                                </select>
+                                <div class="flex gap-2">
+                                    <select id="audioOutputSource" onchange="changeAudioOutput(this.value)" class="flex-1 min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                        <option value="default">Default</option>
+                                    </select>
+                                    <button onclick="testSpeaker('audioOutputSource')" class="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition-colors" title="Test Speaker">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                                    </button>
+                                </div>
                             </div>
                             <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Camera</label>
@@ -436,11 +457,17 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                         <label class="block text-xs font-medium text-slate-400 mb-1">Microphone</label>
                         <select id="settingsAudioSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
                         </select>
+                        <div class="mic-meter"><div id="settingsMicBar" class="mic-bar"></div></div>
                     </div>
                      <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Speaker</label>
-                        <select id="settingsAudioOutputSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        </select>
+                        <div class="flex gap-2">
+                            <select id="settingsAudioOutputSource" class="flex-1 min-w-0 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            </select>
+                            <button onclick="testSpeaker('settingsAudioOutputSource')" class="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition-colors" title="Test Speaker">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                            </button>
+                        </div>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Camera</label>
@@ -920,6 +947,91 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             }));
         }
 
+        async function testSpeaker(selectId) {
+            const el = document.getElementById(selectId);
+            if (!el) return;
+            const deviceId = el.value;
+            
+            if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioContext.state === 'suspended') await audioContext.resume();
+
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            const dest = audioContext.createMediaStreamDestination();
+            
+            osc.connect(gain);
+            gain.connect(dest);
+            
+            const audio = new Audio();
+            audio.srcObject = dest.stream;
+            
+            if (deviceId && deviceId !== 'default' && typeof audio.setSinkId === 'function') {
+                try {
+                    await audio.setSinkId(deviceId);
+                } catch(e) {
+                    console.warn("setSinkId failed", e);
+                }
+            }
+
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(523.25, audioContext.currentTime); 
+            osc.frequency.exponentialRampToValueAtTime(1046.5, audioContext.currentTime + 0.1); 
+            
+            gain.gain.setValueAtTime(0.2, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5);
+            
+            audio.play().catch(e => console.warn("Audio play failed", e));
+            osc.start();
+            osc.stop(audioContext.currentTime + 0.5);
+        }
+
+        let setupMeterFrameId = null;
+        let settingsMeterFrameId = null;
+
+        function setupVolumeMeter(stream, barId) {
+            const bar = document.getElementById(barId);
+            if (!bar) return;
+            
+            if (barId === 'setupMicBar') {
+                if (setupMeterFrameId) cancelAnimationFrame(setupMeterFrameId);
+            } else if (barId === 'settingsMicBar') {
+                if (settingsMeterFrameId) cancelAnimationFrame(settingsMeterFrameId);
+            }
+
+            if (!stream || !stream.getAudioTracks().length) {
+                bar.style.width = '0%';
+                return;
+            }
+
+            if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioContext.state === 'suspended') audioContext.resume();
+
+            const source = audioContext.createMediaStreamSource(stream);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            function draw() {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const average = sum / dataArray.length;
+                const val = Math.min(100, (average / 60) * 100); 
+                bar.style.width = val + '%';
+                
+                if (barId === 'setupMicBar') {
+                    setupMeterFrameId = requestAnimationFrame(draw);
+                } else {
+                    settingsMeterFrameId = requestAnimationFrame(draw);
+                }
+            }
+            draw();
+        }
+
         function handleAvatarUpload(input) {
             const file = input.files[0];
             if (!file) return;
@@ -1017,6 +1129,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 previewVideo.srcObject = localStream;
                 document.getElementById('previewPlaceholder').style.display = 'none';
                 updatePreviewButtons();
+                setupVolumeMeter(localStream, 'setupMicBar');
             } catch (e) {
                 console.error("Preview failed", e);
                 document.getElementById('previewPlaceholder').style.display = 'flex';
@@ -1050,6 +1163,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                     }
                     
                     previewVideo.srcObject = null;
+                    setupVolumeMeter(localStream, 'setupMicBar');
                     updatePreviewButtons();
                 } catch(e2) {
                     updatePreviewButtons();
@@ -1143,6 +1257,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
 
             previewVideo.srcObject = null;
             
+            if (setupMeterFrameId) cancelAnimationFrame(setupMeterFrameId);
             configOverlay.classList.add('opacity-0', 'pointer-events-none');
             setTimeout(() => {
                 configOverlay.style.display = 'none';
@@ -2085,10 +2200,14 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             
             populateSettingsDeviceList();
             settingsOverlay.classList.remove('hidden');
+            if (localStream) {
+                setupVolumeMeter(localStream, 'settingsMicBar');
+            }
         }
 
         function closeSettings() {
             settingsOverlay.classList.add('hidden');
+            if (settingsMeterFrameId) cancelAnimationFrame(settingsMeterFrameId);
         }
 
         function handleSettingsAvatarUpload(input) {
