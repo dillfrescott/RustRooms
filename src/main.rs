@@ -507,7 +507,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 </button>
                 <div class="w-px bg-slate-600 mx-1"></div>
-                <button class="control-btn active-red" onclick="location.href='/'" title="Leave Room">
+                <button class="control-btn active-red" onclick="leaveRoom()" title="Leave Room">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
                 </button>
             </div>
@@ -1081,6 +1081,65 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
 
         const welcomeOverlay = document.getElementById('welcomeOverlay');
 
+        function playNotificationSound(type) {
+            if (!audioContext) return;
+            if (audioContext.state === 'suspended') audioContext.resume();
+
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            
+            const now = audioContext.currentTime;
+
+            if (type === 'join') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(523.25, now);
+                osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.1);
+                
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+                
+                osc.start(now);
+                osc.stop(now + 0.5);
+            } else if (type === 'leave') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(440, now); 
+                osc.frequency.exponentialRampToValueAtTime(220, now + 0.2);
+                
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                
+                osc.start(now);
+                osc.stop(now + 0.3);
+            } else if (type === 'disconnect') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, now); 
+                osc.frequency.exponentialRampToValueAtTime(200, now + 0.2);
+                
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                
+                osc.start(now);
+                osc.stop(now + 0.3);
+            } else if (type === 'mute') {
+                 osc.type = 'sine';
+                 osc.frequency.setValueAtTime(400, now);
+                 gain.gain.setValueAtTime(0.1, now);
+                 gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                 osc.start(now);
+                 osc.stop(now + 0.1);
+            } else if (type === 'unmute') {
+                 osc.type = 'sine';
+                 osc.frequency.setValueAtTime(800, now);
+                 gain.gain.setValueAtTime(0.1, now);
+                 gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                 osc.start(now);
+                 osc.stop(now + 0.1);
+            }
+        }
+
         function updateStatus(state, message) {
             statusText.innerText = message;
             connectionDot.className = 'connection-dot ' + state;
@@ -1103,6 +1162,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             ws = new WebSocket(wsUrl);
             
                         ws.onopen = () => {
+                            playNotificationSound('join');
                             reconnectionAttempts = 0;
                             updateStatus('connected', 'Connected');
                             const camEnabled = localStream && localStream.getVideoTracks()[0] && localStream.getVideoTracks()[0].enabled;
@@ -1128,6 +1188,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                             
                             switch (msg.type) {
                                 case 'user-joined':
+                                    playNotificationSound('join');
                                     if (peers[msg.userId]) {
                                         removePeer(msg.userId);
                                     }
@@ -1156,6 +1217,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                                     }));
                                     break;
                                 case 'user-left':
+                                    playNotificationSound('leave');
                                     removePeer(msg.userId);
                                     delete peerCamStatus[msg.userId];
                                     delete peerScreenStatus[msg.userId];
@@ -1654,6 +1716,13 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             }
         }
 
+        function leaveRoom() {
+             playNotificationSound('disconnect');
+             setTimeout(() => {
+                 location.href = '/';
+             }, 300);
+        }
+
         function toggleMic() {
             if (!localStream) return;
             const tracks = localStream.getAudioTracks();
@@ -1662,9 +1731,11 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 track.enabled = !track.enabled;
                 const btn = document.getElementById('btnMic');
                 if (!track.enabled) {
+                    playNotificationSound('mute');
                     btn.classList.add('active-red');
                     btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
                 } else {
+                    playNotificationSound('unmute');
                     btn.classList.remove('active-red');
                     btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
                 }
