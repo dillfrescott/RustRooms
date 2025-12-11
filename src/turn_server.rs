@@ -29,16 +29,13 @@ impl AuthHandler for SimpleAuthHandler {
     }
 }
 
-pub async fn start(port: u16) -> Result<()> {
-    let realm = "rustrooms";
-    let user = "rustrooms";
-    let pass = "rustrooms";
+pub async fn start(port: u16, user: String, pass: String, realm: String) -> Result<()> {
     let public_ip = "0.0.0.0";
 
-    let key = generate_auth_key(user, realm, pass);
+    let key = generate_auth_key(&user, &realm, &pass);
 
     let auth_handler = Arc::new(SimpleAuthHandler { 
-        user: user.to_string(), 
+        user: user.clone(), 
         key 
     });
 
@@ -53,7 +50,7 @@ pub async fn start(port: u16) -> Result<()> {
 
     let config = ServerConfig {
         auth_handler,
-        realm: realm.to_string(),
+        realm,
         conn_configs: vec![ConnConfig {
             conn: Arc::new(conn),
             relay_addr_generator: Box::new(relay_addr_gen),

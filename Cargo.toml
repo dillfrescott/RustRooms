@@ -4,16 +4,16 @@ version = "1.0.0"
 edition = "2024"
 
 [dependencies]
-tokio = { version = "*", features = ["full"] }
-axum = { version = "*", features = ["ws"] }
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
-uuid = { version = "*", features = ["v4"] }
-tower-http = { version = "*", features = ["fs", "trace"] }
-tracing = "*"
-tracing-subscriber = "*"
-futures = "*"
+tokio = { version = "1.36", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.7", features = ["v4"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+futures = "0.3"
 turn = "0.11.0"
-anyhow = "1.0.100"
-async-trait = "0.1.89"
+anyhow = "1.0"
+async-trait = "0.1"
 webrtc-util = "0.12.0"

@@ -13,11 +13,13 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
-const HTML_PAGE: &str = r###"
+fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
+    let html = r###"
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -528,10 +530,10 @@ const HTML_PAGE: &str = r###"
         const rtcConfig = {
             iceServers: [
                 { urls: `stun:${window.location.hostname}:3478` },
-                { 
-                    urls: `turn:${window.location.hostname}:3478`, 
-                    username: "rustrooms", 
-                    credential: "rustrooms" 
+                {
+                    urls: `turn:${window.location.hostname}:3478`,
+                    username: "{{TURN_USER}}", 
+                    credential: "{{TURN_PASS}}" 
                 }
             ]
         };
@@ -1098,10 +1100,10 @@ const HTML_PAGE: &str = r###"
                             const screenEnabled = !!screenStream;
                             const screenHasAudio = screenStream && screenStream.getAudioTracks().length > 0;
                             const myId = getPersistentId();
-                            ws.send(JSON.stringify({ 
+                            ws.send(JSON.stringify({
                                 type: "join", 
                                 userId: myId,
-                                data: { 
+                                data: {
                                     nickname: userNickname,
                                     avatar: userAvatar,
                                     camEnabled: camEnabled,
@@ -1135,7 +1137,7 @@ const HTML_PAGE: &str = r###"
                                     ws.send(JSON.stringify({
                                         type: 'identify',
                                         target: msg.userId,
-                                        data: { 
+                                        data: {
                                             nickname: userNickname, 
                                             avatar: userAvatar,
                                             camEnabled: myCamEnabled,
@@ -1224,6 +1226,38 @@ const HTML_PAGE: &str = r###"
                 }, 300);
             }
         }
+        
+        function setAvatar(layer, avatar) {
+            layer.innerHTML = '';
+            if (avatar) {
+               const bgImg = document.createElement('img');
+               bgImg.src = avatar;
+               bgImg.className = 'avatar-img';
+               
+               const centerDiv = document.createElement('div');
+               centerDiv.className = 'avatar-center';
+               
+               const centerImg = document.createElement('img');
+               centerImg.src = avatar;
+               
+               centerDiv.appendChild(centerImg);
+               layer.appendChild(bgImg);
+               layer.appendChild(centerDiv);
+           } else {
+               const centerDiv = document.createElement('div');
+               centerDiv.className = 'avatar-center';
+               centerDiv.style.background = 'transparent';
+               centerDiv.style.border = 'none';
+               
+               const text = document.createElement('div');
+               text.className = 'text-6xl mb-2';
+               text.innerText = '👤';
+               
+               centerDiv.appendChild(text);
+               layer.appendChild(centerDiv);
+           }
+        }
+
         function updatePeerInfo(userId, nickname, avatar) {
             const wrapper = document.getElementById(`wrapper-${userId}`);
             if (wrapper) {
@@ -1232,20 +1266,7 @@ const HTML_PAGE: &str = r###"
                 
                 const avatarLayer = wrapper.querySelector('.avatar-layer');
                 if (avatarLayer) {
-                     if (avatar) {
-                       avatarLayer.innerHTML = `
-                           <img src="${avatar}" class="avatar-img">
-                           <div class="avatar-center">
-                               <img src="${avatar}">
-                           </div>
-                       `;
-                   } else {
-                       avatarLayer.innerHTML = `
-                           <div class="avatar-center" style="background:transparent; border:none;">
-                               <div class="text-6xl mb-2">👤</div>
-                           </div>
-                       `;
-                   }
+                     setAvatar(avatarLayer, avatar);
                 }
             }
         }
@@ -1375,20 +1396,7 @@ const HTML_PAGE: &str = r###"
                     const avatarLayer = document.createElement('div');
                     avatarLayer.className = 'avatar-layer';
                     
-                    if (avatarUrl) {
-                        avatarLayer.innerHTML = `
-                            <img src="${avatarUrl}" class="avatar-img">
-                            <div class="avatar-center">
-                                <img src="${avatarUrl}">
-                            </div>
-                        `;
-                    } else {
-                        avatarLayer.innerHTML = `
-                            <div class="avatar-center" style="background:transparent; border:none;">
-                                <div class="text-6xl mb-2">👤</div>
-                            </div>
-                        `;
-                    }
+                    setAvatar(avatarLayer, avatarUrl);
 
                     const label = document.createElement('div');
                     label.className = 'absolute bottom-3 left-3 bg-black/50 px-3 py-1 rounded-full text-sm text-white backdrop-blur-md z-30';
@@ -1406,7 +1414,7 @@ const HTML_PAGE: &str = r###"
                     
                     container.addEventListener('fullscreenchange', () => {
                         if (document.fullscreenElement === container) {
-                            fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+                            fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3"/></svg>';
                             fsBtn.classList.add('bg-blue-600');
                         } else {
                             fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2-2h3"/></svg>';
@@ -1964,9 +1972,9 @@ const HTML_PAGE: &str = r###"
             updateLocalAvatar();
             
             if (ws && ws.readyState === WebSocket.OPEN) {
-                 ws.send(JSON.stringify({ 
+                 ws.send(JSON.stringify({
                     type: "update-user", 
-                    data: { 
+                    data: {
                         nickname: userNickname,
                         avatar: userAvatar 
                     } 
@@ -1997,7 +2005,6 @@ const HTML_PAGE: &str = r###"
              } else {
                  layer.style.display = 'flex'; 
                  if (userAvatar) {
-                     img.src = userAvatar;
                      img.classList.remove('hidden');
                      
                      centerImg.src = userAvatar;
@@ -2160,6 +2167,8 @@ const HTML_PAGE: &str = r###"
 </body>
 </html>
 "###;
+    html.replace("{{TURN_USER}}", turn_user).replace("{{TURN_PASS}}", turn_pass)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignalMessage {
@@ -2174,19 +2183,39 @@ struct SignalMessage {
 type UserTx = tokio::sync::mpsc::UnboundedSender<Result<Message, axum::Error>>;
 type RoomMap = Arc<Mutex<HashMap<String, HashMap<String, UserTx>>>>;
 
+#[derive(Clone)]
+struct AppState {
+    rooms: RoomMap,
+    turn_user: String,
+    turn_pass: String,
+}
+
 #[tokio::main]
 async fn main() {
     let rooms: RoomMap = Arc::new(Mutex::new(HashMap::new()));
+    
+    let turn_user = Uuid::new_v4().to_string();
+    let turn_pass = Uuid::new_v4().to_string();
+    let realm = "rustrooms";
+
+    let state = AppState {
+        rooms,
+        turn_user: turn_user.clone(),
+        turn_pass: turn_pass.clone(),
+    };
 
     let app = Router::new()
         .route("/", get(serve_room))
         .route("/new", get(redirect_to_new_room))
-        .route("/room/{id}", get(serve_room))
-        .route("/ws/{id}", get(ws_handler))
-        .with_state(rooms);
+        .route("/room/:id", get(serve_room))
+        .route("/ws/:id", get(ws_handler))
+        .with_state(state);
 
-    tokio::spawn(async {
-        if let Err(e) = turn_server::start(3478).await {
+    let t_user = turn_user.clone();
+    let t_pass = turn_pass.clone();
+    
+    tokio::spawn(async move {
+        if let Err(e) = turn_server::start(3478, t_user, t_pass, realm.to_string()).await {
             eprintln!("failed to start TURN server: {}", e);
         }
     });
@@ -2209,16 +2238,16 @@ async fn redirect_to_new_room() -> Redirect {
     Redirect::to(&format!("/room/{}", new_id))
 }
 
-async fn serve_room() -> Html<&'static str> {
-    Html(HTML_PAGE)
+async fn serve_room(State(state): State<AppState>) -> Html<String> {
+    Html(get_html_page(&state.turn_user, &state.turn_pass))
 }
 
 async fn ws_handler(
     Path(room_id): Path<String>,
     ws: WebSocketUpgrade,
-    State(rooms): State<RoomMap>,
+    State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, room_id, rooms))
+    ws.on_upgrade(move |socket| handle_socket(socket, room_id, state.rooms))
 }
 
 async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
@@ -2247,8 +2276,13 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                              user_id = parsed.user_id.unwrap_or_else(|| Uuid::new_v4().to_string());
                              
                              {
-                                let mut rooms_lock = rooms.lock().unwrap();
+                                let mut rooms_lock = rooms.lock().await;
                                 let room = rooms_lock.entry(room_id.clone()).or_insert_with(HashMap::new);
+                                
+                                if room.contains_key(&user_id) {
+                                    break; 
+                                }
+                                
                                 room.insert(user_id.clone(), tx.clone());
                              }
                              is_joined = true;
@@ -2261,7 +2295,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                                 data: notify_data,
                             }).unwrap();
 
-                            let rooms_lock = rooms.lock().unwrap();
+                            let rooms_lock = rooms.lock().await;
                             if let Some(room) = rooms_lock.get(&room_id) {
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
@@ -2271,7 +2305,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                             }
                         }
                     } else {
-                        let rooms_lock = rooms.lock().unwrap();
+                        let rooms_lock = rooms.lock().await;
                         if let Some(room) = rooms_lock.get(&room_id) {
                             if parsed.msg_type == "update-user" {
                                 let notify_data = parsed.data.clone();
@@ -2335,21 +2369,23 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
     }
 
     {
-        let mut rooms_lock = rooms.lock().unwrap();
+        let mut rooms_lock = rooms.lock().await;
         if let Some(room) = rooms_lock.get_mut(&room_id) {
-            room.remove(&user_id);
-            if room.is_empty() {
-                rooms_lock.remove(&room_id);
-            } else {
-                let notify_msg = serde_json::to_string(&SignalMessage {
-                    msg_type: "user-left".into(),
-                    user_id: Some(user_id.clone()),
-                    target: None,
-                    data: None,
-                }).unwrap();
+            if is_joined {
+                room.remove(&user_id);
+                if room.is_empty() {
+                    rooms_lock.remove(&room_id);
+                } else {
+                    let notify_msg = serde_json::to_string(&SignalMessage {
+                        msg_type: "user-left".into(),
+                        user_id: Some(user_id.clone()),
+                        target: None,
+                        data: None,
+                    }).unwrap();
 
-                for (_, tx) in room.iter() {
-                    let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                    for (_, tx) in room.iter() {
+                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                    }
                 }
             }
         }
