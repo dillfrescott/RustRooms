@@ -383,7 +383,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                             <input type="text" id="nicknameInput" placeholder="Enter your name" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all" maxlength="32">
                         </div>
                         
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div class="grid grid-cols-1 gap-3">
                              <div>
                                 <label class="block text-xs font-medium text-slate-400 mb-1">Microphone</label>
                                 <select id="audioSource" onchange="startPreview()" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -452,7 +452,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                     <input type="text" id="settingsNicknameInput" placeholder="Enter your name" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all" maxlength="32">
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 gap-4">
                      <div>
                         <label class="block text-xs font-medium text-slate-400 mb-1">Microphone</label>
                         <select id="settingsAudioSource" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
