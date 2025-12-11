@@ -823,6 +823,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                      }
                      
                      setupAudioMonitor(localStream, 'local');
+                     setupVolumeMeter(localStream, 'settingsMicBar');
                      
                  } catch (e) {
                      console.error("Audio switch failed", e);
@@ -998,6 +999,15 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 if (settingsMeterFrameId) cancelAnimationFrame(settingsMeterFrameId);
             }
 
+            if (bar._audioSource) {
+                try { bar._audioSource.disconnect(); } catch(e) {}
+                bar._audioSource = null;
+            }
+            if (bar._analyser) {
+                try { bar._analyser.disconnect(); } catch(e) {}
+                bar._analyser = null;
+            }
+
             if (!stream || !stream.getAudioTracks().length) {
                 bar.style.width = '0%';
                 return;
@@ -1011,9 +1021,13 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             analyser.fftSize = 256;
             source.connect(analyser);
 
+            bar._audioSource = source;
+            bar._analyser = analyser;
+
             const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
             function draw() {
+                if (!bar._analyser) return;
                 analyser.getByteFrequencyData(dataArray);
                 let sum = 0;
                 for (let i = 0; i < dataArray.length; i++) {
