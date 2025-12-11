@@ -30,13 +30,22 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        html {
+            height: 100%;
+            overflow: hidden;
+            overscroll-behavior: none;
+        }
+
         body { 
             background-color: #0f172a; 
             color: #f8fafc; 
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
             overflow: hidden; 
-            height: 100dvh; 
-            width: 100vw;
+            position: fixed;
+            inset: 0;
+            width: 100%;
+            height: 100dvh;
+            touch-action: pan-x pan-y;
         }
         
         ::-webkit-scrollbar { width: 8px; }
@@ -295,7 +304,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
 
     </style>
 </head>
-<body class="flex flex-col h-screen w-screen overflow-hidden bg-slate-900">
+<body class="flex flex-col overflow-hidden bg-slate-900">
 
     <div id="welcomeOverlay" class="fixed inset-0 z-[70] bg-slate-900 flex flex-col items-center justify-center p-4 transition-opacity duration-300" style="display: none;">
         <div class="text-center space-y-6 max-w-md w-full">
