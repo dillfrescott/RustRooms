@@ -166,7 +166,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
 
         .pip-wrapper {
             position: fixed;
-            bottom: 100px; 
+            bottom: 220px; 
             right: 16px;
             cursor: grab;
             touch-action: none;
@@ -184,7 +184,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
         @media (min-width: 768px) {
             .pip-wrapper {
                 width: 280px;
-                bottom: 120px;
+                bottom: 240px;
             }
         }
         
