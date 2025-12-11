@@ -5,6 +5,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
+    http::header,
     response::{Html, IntoResponse, Redirect},
     routing::get,
     Router,
@@ -17,6 +18,20 @@ use std::{
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+async fn rnnoise_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("rnnoise.js"),
+    )
+}
+
+async fn rnnoise_processor_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("rnnoise_processor.js"),
+    )
+}
 
 fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
     let html = r###"
@@ -602,12 +617,15 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 await populateDeviceList();
                 navigator.mediaDevices.ondevicechange = populateDeviceList;
 
+                await startPreview();
+
             } catch (e) {
                 console.warn("Device access failed", e);
                 try {
                     localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
                     updatePreviewButtons();
                     await populateDeviceList();
+                    await startPreview();
                 } catch(e2) {
                      console.error("Audio failed too", e2);
                      updatePreviewButtons();
@@ -732,10 +750,34 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
              
              if (audioId && audioId !== currentAudioId) {
                  try {
-                     const constraints = { audio: { deviceId: { exact: audioId } } };
-                     const stream = await navigator.mediaDevices.getUserMedia(constraints);
-                     const newTrack = stream.getAudioTracks()[0];
+                     const constraints = { 
+                        audio: { 
+                            deviceId: { exact: audioId },
+                            echoCancellation: true,
+                            noiseSuppression: false,
+                            autoGainControl: true,
+                            sampleRate: 48000
+                        } 
+                    };
+                     let stream = await navigator.mediaDevices.getUserMedia(constraints);
                      
+                     if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                     try { await audioContext.audioWorklet.addModule('/rnnoise_processor.js'); } catch (err) { console.error("Failed to load rnnoise_processor in switchMediaStream", err); }
+                     if (audioContext.state === 'suspended') audioContext.resume().catch(e => {});
+
+                     const source = audioContext.createMediaStreamSource(stream);
+                     const worklet = new AudioWorkletNode(audioContext, 'rnnoise-processor');
+                     const dest = audioContext.createMediaStreamDestination();
+                     source.connect(worklet);
+                     worklet.connect(dest);
+                     
+                     const newTrack = dest.stream.getAudioTracks()[0];
+                     
+                     if (localStream && localStream._originalStream) {
+                         localStream._originalStream.getTracks().forEach(t => t.stop());
+                     }
+                     if (localStream) localStream._originalStream = stream;
+
                      if (currentAudioTrack) {
                          currentAudioTrack.stop();
                          localStream.removeTrack(currentAudioTrack);
@@ -922,6 +964,9 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
         async function startPreview() {
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
+                if (localStream._originalStream) {
+                     localStream._originalStream.getTracks().forEach(track => track.stop());
+                }
                 localStream = null;
             }
 
@@ -929,12 +974,46 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             const videoSource = videoSelect.value;
             
             const constraints = {
-                audio: { deviceId: audioSource ? { exact: audioSource } : undefined },
+                audio: { 
+                    deviceId: audioSource ? { exact: audioSource } : undefined,
+                    echoCancellation: true,
+                    noiseSuppression: false,
+                    autoGainControl: true,
+                    sampleRate: 48000
+                },
                 video: { deviceId: videoSource ? { exact: videoSource } : undefined }
             };
 
             try {
-                localStream = await navigator.mediaDevices.getUserMedia(constraints);
+                let rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+                
+                 if (rawStream.getAudioTracks().length > 0) {
+                     if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                     
+                     try {
+                         await audioContext.audioWorklet.addModule('/rnnoise_processor.js');
+                     } catch (err) { console.error("Failed to load rnnoise_processor in startPreview", err); }
+                     
+                     if (audioContext.state === 'suspended') {
+                         audioContext.resume().catch(e => {});
+                     }
+
+                     const source = audioContext.createMediaStreamSource(rawStream);
+                     const worklet = new AudioWorkletNode(audioContext, 'rnnoise-processor');
+                     const dest = audioContext.createMediaStreamDestination();
+                     
+                     source.connect(worklet);
+                     worklet.connect(dest);
+                     
+                     const processedAudio = dest.stream.getAudioTracks()[0];
+                     const videoTracks = rawStream.getVideoTracks();
+                     
+                     localStream = new MediaStream([processedAudio, ...videoTracks]);
+                     localStream._originalStream = rawStream;
+                } else {
+                    localStream = rawStream;
+                }
+
                 previewVideo.srcObject = localStream;
                 document.getElementById('previewPlaceholder').style.display = 'none';
                 updatePreviewButtons();
@@ -942,7 +1021,34 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 console.error("Preview failed", e);
                 document.getElementById('previewPlaceholder').style.display = 'flex';
                  try {
-                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    let rawStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    
+                    if (rawStream.getAudioTracks().length > 0) {
+                         if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                         
+                         try {
+                             await audioContext.audioWorklet.addModule('/rnnoise_processor.js');
+                         } catch (err) { console.error("Failed to load rnnoise_processor in startPreview fallback", err); }
+                         
+                         if (audioContext.state === 'suspended') {
+                             audioContext.resume().catch(e => {});
+                         }
+    
+                         const source = audioContext.createMediaStreamSource(rawStream);
+                         const worklet = new AudioWorkletNode(audioContext, 'rnnoise-processor');
+                         const dest = audioContext.createMediaStreamDestination();
+                         
+                         source.connect(worklet);
+                         worklet.connect(dest);
+                         
+                         const processedAudio = dest.stream.getAudioTracks()[0];
+                         
+                         localStream = new MediaStream([processedAudio]);
+                         localStream._originalStream = rawStream;
+                    } else {
+                        localStream = rawStream;
+                    }
+                    
                     previewVideo.srcObject = null;
                     updatePreviewButtons();
                 } catch(e2) {
@@ -2285,10 +2391,12 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/", get(serve_room))
-        .route("/new", get(redirect_to_new_room))
-        .route("/room/:id", get(serve_room))
-        .route("/ws/:id", get(ws_handler))
+        .route("/", get(index))
+        .route("/new", get(new_room))
+        .route("/room/:room_id", get(index))
+        .route("/rnnoise.js", get(rnnoise_js))
+        .route("/rnnoise_processor.js", get(rnnoise_processor_js))
+        .route("/ws/:room_id", get(ws_handler))
         .with_state(state);
 
     let t_user = turn_user.clone();
@@ -2313,12 +2421,12 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn redirect_to_new_room() -> Redirect {
+async fn new_room() -> Redirect {
     let new_id = Uuid::new_v4().to_string();
     Redirect::to(&format!("/room/{}", new_id))
 }
 
-async fn serve_room(State(state): State<AppState>) -> Html<String> {
+async fn index(State(state): State<AppState>) -> Html<String> {
     Html(get_html_page(&state.turn_user, &state.turn_pass))
 }
 
