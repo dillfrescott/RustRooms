@@ -2176,6 +2176,8 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             navigator.clipboard.writeText(window.location.href);
             
             const btn = document.getElementById('btnCopy');
+            if (btn.classList.contains('bg-green-600')) return;
+
             const icon = document.getElementById('iconCopy');
             
             const originalHTML = btn.innerHTML;
