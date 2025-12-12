@@ -1143,6 +1143,69 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 document.getElementById('previewPlaceholder').style.display = 'none';
                 updatePreviewButtons();
                 setupVolumeMeter(localStream, 'setupMicBar');
+
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    if (document.getElementById('localVideo')) document.getElementById('localVideo').srcObject = localStream;
+                    updateLocalLabel();
+                    updateLocalAvatar();
+
+                    const btnMic = document.getElementById('btnMic');
+                    const btnCam = document.getElementById('btnCam');
+                    const micOffSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"></path><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
+                    const camOffSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"></line><path d="M21 21l-3.5-3.5m-2-2l-2-2m-2-2l-2-2m-2-2l-3.5-3.5"></path><path d="M15 7h5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-5"></path><path d="M4 8v8a2 2 0 0 0 2 2h4.5"></path></svg>`;
+                    const micOnSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>`;
+                    const camOnSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`;
+
+                    const audioTrack = localStream.getAudioTracks()[0];
+                    if (!audioTrack || !audioTrack.enabled) {
+                         if (btnMic) { btnMic.classList.add('active-red'); btnMic.innerHTML = micOffSvg; }
+                    } else {
+                         if (btnMic) { btnMic.classList.remove('active-red'); btnMic.innerHTML = micOnSvg; }
+                    }
+
+                    const videoTrack = localStream.getVideoTracks()[0];
+                    if (!videoTrack || !videoTrack.enabled) {
+                         if (btnCam) { btnCam.classList.add('active-red'); btnCam.innerHTML = camOffSvg; }
+                    } else {
+                         if (btnCam) { btnCam.classList.remove('active-red'); btnCam.innerHTML = camOnSvg; }
+                    }
+
+                    for (const userId in peers) {
+                        const pc = peers[userId];
+                        let negotiationNeeded = false;
+                        
+                        if (audioTrack) {
+                            const sender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+                            if (sender) {
+                                sender.replaceTrack(audioTrack);
+                            } else {
+                                pc.addTrack(audioTrack, localStream);
+                                negotiationNeeded = true;
+                            }
+                        }
+                        
+                        if (videoTrack) {
+                            const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                            if (sender) {
+                                sender.replaceTrack(videoTrack);
+                            } else {
+                                pc.addTrack(videoTrack, localStream);
+                                negotiationNeeded = true;
+                            }
+                        }
+                        
+                        if (negotiationNeeded) {
+                            negotiate(userId, pc);
+                        }
+                    }
+                    
+                    if (videoTrack) {
+                        ws.send(JSON.stringify({
+                            type: 'cam-toggle',
+                            data: { enabled: true }
+                        }));
+                    }
+                }
             } catch (e) {
                 console.error("Preview failed", e);
                 document.getElementById('previewPlaceholder').style.display = 'flex';
