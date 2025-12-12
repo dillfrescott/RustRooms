@@ -421,8 +421,8 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 </button>
             </div>
 
-            <button onclick="joinRoom()" class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold shadow-lg shadow-blue-500/30 transition-all transform hover:scale-[1.02]">
-                Join Room
+            <button id="btnJoin" onclick="joinRoom()" disabled class="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-bold shadow-lg shadow-blue-500/30 transition-all transform hover:scale-[1.02]">
+                Loading...
             </button>
         </div>
     </div>
@@ -633,6 +633,8 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
         });
 
         async function loadDevices() {
+            const btnJoin = document.getElementById('btnJoin');
+            
             loadPreferences();
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
@@ -656,6 +658,11 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                      console.error("Audio failed too", e2);
                      updatePreviewButtons();
                 }
+            }
+            
+            if(btnJoin) {
+                 btnJoin.disabled = false;
+                 btnJoin.innerHTML = "Join Room";
             }
         }
 
