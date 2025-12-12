@@ -318,7 +318,6 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
             transition: width 0.05s linear;
         }
 
-        /* Taskbar style footer */
         .taskbar {
             background: rgba(15, 23, 42, 0.95);
             border-top: 1px solid rgba(255, 255, 255, 0.1);
