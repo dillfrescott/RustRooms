@@ -1063,7 +1063,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                     const canvas = document.createElement('canvas');
                     const ctx = canvas.getContext('2d');
                     
-                    const MAX_SIZE = 128;
+                    const MAX_SIZE = 2048;
                     let width = img.width;
                     let height = img.height;
                     
@@ -2305,7 +2305,7 @@ fn get_html_page(turn_user: &str, turn_pass: &str) -> String {
                 img.onload = function() {
                     const canvas = document.createElement('canvas');
                     const ctx = canvas.getContext('2d');
-                    const MAX_SIZE = 128;
+                    const MAX_SIZE = 2048;
                     let width = img.width;
                     let height = img.height;
                     
@@ -2694,7 +2694,15 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                              }
                              is_joined = true;
                              
-                             let notify_data = parsed.data.clone();
+                             let mut notify_data = parsed.data.clone();
+                             if let Some(serde_json::Value::Object(ref mut map)) = notify_data {
+                                 if let Some(serde_json::Value::String(avatar)) = map.get("avatar") {
+                                     if avatar.len() > 7_000_000 {
+                                         map.remove("avatar");
+                                     }
+                                 }
+                             }
+
                              let notify_msg = serde_json::to_string(&SignalMessage {
                                 msg_type: "user-joined".into(),
                                 user_id: Some(user_id.clone()),
@@ -2715,7 +2723,15 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                         let rooms_lock = rooms.lock().await;
                         if let Some(room) = rooms_lock.get(&room_id) {
                             if parsed.msg_type == "update-user" {
-                                let notify_data = parsed.data.clone();
+                                let mut notify_data = parsed.data.clone();
+                                if let Some(serde_json::Value::Object(ref mut map)) = notify_data {
+                                    if let Some(serde_json::Value::String(avatar)) = map.get("avatar") {
+                                        if avatar.len() > 7_000_000 {
+                                            map.remove("avatar");
+                                        }
+                                    }
+                                }
+
                                 let notify_msg = serde_json::to_string(&SignalMessage {
                                     msg_type: "user-update".into(),
                                     user_id: Some(user_id.clone()),
