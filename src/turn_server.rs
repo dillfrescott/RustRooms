@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::UdpSocket;
 use turn::auth::{AuthHandler, generate_auth_key};
 use turn::server::config::{ConnConfig, ServerConfig};
 use turn::server::Server;
@@ -28,9 +29,7 @@ impl AuthHandler for SimpleAuthHandler {
     }
 }
 
-use webrtc_util::conn::Conn;
-
-pub async fn start(conn: Arc<dyn Conn + Send + Sync>, user: String, pass: String, realm: String) -> Result<()> {
+pub async fn start(port: u16, user: String, pass: String, realm: String) -> Result<()> {
     let public_ip = "0.0.0.0";
 
     let key = generate_auth_key(&user, &realm, &pass);
@@ -39,6 +38,9 @@ pub async fn start(conn: Arc<dyn Conn + Send + Sync>, user: String, pass: String
         user: user.clone(), 
         key 
     });
+
+    let bind_addr = format!("0.0.0.0:{}", port);
+    let conn = UdpSocket::bind(&bind_addr).await?;
 
     let relay_addr_gen = RelayAddressGeneratorStatic {
         relay_address: public_ip.parse()?,
@@ -50,7 +52,7 @@ pub async fn start(conn: Arc<dyn Conn + Send + Sync>, user: String, pass: String
         auth_handler,
         realm,
         conn_configs: vec![ConnConfig {
-            conn,
+            conn: Arc::new(conn),
             relay_addr_generator: Box::new(relay_addr_gen),
         }],
         channel_bind_timeout: std::time::Duration::from_secs(600),
@@ -58,7 +60,7 @@ pub async fn start(conn: Arc<dyn Conn + Send + Sync>, user: String, pass: String
     };
 
     let server = Server::new(config).await?;
-    println!("TURN Server started");
+    println!("TURN Server listening on {}", bind_addr);
 
     tokio::signal::ctrl_c().await?;
     server.close().await?;
