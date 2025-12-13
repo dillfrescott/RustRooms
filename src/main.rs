@@ -2570,7 +2570,7 @@ struct SignalMessage {
     user_id: Option<String>, 
 }
 
-type UserTx = tokio::sync::mpsc::UnboundedSender<Result<Message, axum::Error>>;
+type UserTx = tokio::sync::mpsc::Sender<Result<Message, axum::Error>>;
 type RoomMap = Arc<Mutex<HashMap<String, HashMap<String, UserTx>>>>;
 
 #[derive(Clone)]
@@ -2630,8 +2630,15 @@ async fn new_room() -> Redirect {
     Redirect::to(&format!("/room/{}", new_id))
 }
 
-async fn index(State(state): State<AppState>) -> Html<String> {
-    Html(get_html_page(&state.turn_user, &state.turn_pass))
+async fn index(State(state): State<AppState>) -> impl IntoResponse {
+    let html = get_html_page(&state.turn_user, &state.turn_pass);
+    (
+        [(
+            header::CONTENT_SECURITY_POLICY, 
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' 'unsafe-eval' https://cdn.tailwindcss.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' wss: ws:; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none';"
+        )],
+        Html(html)
+    )
 }
 
 async fn ws_handler(
@@ -2639,12 +2646,15 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    if room_id.len() > 64 || !room_id.chars().all(|c| c.is_alphanumeric() || c == '-') {
+        return (axum::http::StatusCode::BAD_REQUEST, "Invalid room ID").into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, room_id, state.rooms))
 }
 
 async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
     let (mut user_ws_tx, mut user_ws_rx) = socket.split();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(500);
     
     let mut user_id = String::new(); 
     let mut is_joined = false;
@@ -2665,7 +2675,12 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                 if let Ok(parsed) = serde_json::from_str::<SignalMessage>(&text) {
                     if !is_joined {
                         if parsed.msg_type == "join" {
-                             user_id = parsed.user_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+                             let raw_id = parsed.user_id.unwrap_or_default();
+                             user_id = if !raw_id.is_empty() && raw_id.chars().all(|c| c.is_alphanumeric() || c == '-') && raw_id.len() < 64 {
+                                 raw_id
+                             } else {
+                                 Uuid::new_v4().to_string()
+                             };
                              
                              {
                                 let mut rooms_lock = rooms.lock().await;
@@ -2691,7 +2706,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                             if let Some(room) = rooms_lock.get(&room_id) {
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                                        let _ = tx.try_send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             }
@@ -2710,7 +2725,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
 
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                                        let _ = tx.try_send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             } else if parsed.msg_type == "cam-toggle" {
@@ -2724,7 +2739,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
 
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                                        let _ = tx.try_send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             } else if parsed.msg_type == "screen-toggle" {
@@ -2738,7 +2753,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
 
                                 for (uid, tx) in room.iter() {
                                     if *uid != user_id {
-                                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                                        let _ = tx.try_send(Ok(Message::Text(notify_msg.clone().into())));
                                     }
                                 }
                             } else if let Some(ref target_id) = parsed.target {
@@ -2746,7 +2761,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                                     let mut forwarded_msg = parsed.clone();
                                     forwarded_msg.user_id = Some(user_id.clone());
                                     let forwarded_text = serde_json::to_string(&forwarded_msg).unwrap();
-                                    let _ = target_tx.send(Ok(Message::Text(forwarded_text.into())));
+                                    let _ = target_tx.try_send(Ok(Message::Text(forwarded_text.into())));
                                 }
                             }
                         }
@@ -2776,7 +2791,7 @@ async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
                     }).unwrap();
 
                     for (_, tx) in room.iter() {
-                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+                        let _ = tx.try_send(Ok(Message::Text(notify_msg.clone().into())));
                     }
                 }
             }
