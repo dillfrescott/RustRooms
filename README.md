@@ -10,6 +10,4 @@
 
 ### Notes:
 
-It uses port 3000 TCP (for the web interface) and also port 3478 UDP (for the TURN server).
-
-You'll want to make sure both these ports are free and accessible.
+It uses port 3000 TCP.

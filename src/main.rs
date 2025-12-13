@@ -1,4 +1,5 @@
 mod turn_server;
+mod multiplex;
 
 use axum::{
     extract::{
@@ -2571,7 +2572,7 @@ struct SignalMessage {
 }
 
 type UserTx = tokio::sync::mpsc::UnboundedSender<Result<Message, axum::Error>>;
-type RoomMap = Arc<Mutex<HashMap<String, HashMap<String, UserTx>>>>;
+type RoomMap = Arc<Mutex<HashMap<String, HashMap<String, (String, UserTx)>>>>;
 
 #[derive(Clone)]
 struct AppState {
@@ -2582,6 +2583,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
     let rooms: RoomMap = Arc::new(Mutex::new(HashMap::new()));
     
     let turn_user = Uuid::new_v4().to_string();
@@ -2606,12 +2608,6 @@ async fn main() {
     let t_user = turn_user.clone();
     let t_pass = turn_pass.clone();
     
-    tokio::spawn(async move {
-        if let Err(e) = turn_server::start(3478, t_user, t_pass, realm.to_string()).await {
-            eprintln!("failed to start TURN server: {}", e);
-        }
-    });
-
     let port = 3000;
     let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
         Ok(l) => l,
@@ -2622,7 +2618,65 @@ async fn main() {
         }
     };
     println!("SERVER RUNNING ON PORT {}", port);
-    axum::serve(listener, app).await.unwrap();
+
+    let local_addr = listener.local_addr().unwrap();
+    let (turn_adapter, turn_stream_tx) = multiplex::TurnAdapter::new(local_addr);
+
+    tokio::spawn(async move {
+        if let Err(e) = turn_server::start(turn_adapter, t_user, t_pass, realm.to_string()).await {
+            eprintln!("failed to start TURN server: {}", e);
+        }
+    });
+
+    loop {
+        let (socket, remote_addr) = match listener.accept().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("accept error: {}", e);
+                continue;
+            }
+        };
+
+        tracing::info!("Accepted connection from {}", remote_addr);
+
+        let app = app.clone();
+        let turn_tx = turn_stream_tx.clone();
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 1];
+            match socket.peek(&mut buf).await {
+                Ok(n) if n > 0 => {
+                    let first_byte = buf[0];
+                    if first_byte < 32 {
+                        tracing::info!("Connection from {} identified as TURN traffic (byte: {})", remote_addr, first_byte);
+                        let _ = turn_tx.send(socket).await;
+                    } else {
+                        tracing::info!("Connection from {} identified as HTTP/WS traffic (byte: {})", remote_addr, first_byte);
+                        use hyper_util::rt::TokioIo;
+                        use hyper_util::service::TowerToHyperService;
+                        
+                        let socket = TokioIo::new(socket);
+                        let service = TowerToHyperService::new(app); 
+                        
+                        if let Err(err) = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(socket, service)
+                            .with_upgrades()
+                            .await 
+                        {
+                            tracing::error!("serve_connection error for {}: {}", remote_addr, err);
+                        }
+                    }
+                }
+                Ok(0) => {
+                    tracing::warn!("Connection from {} closed (peek returned 0)", remote_addr);
+                }
+                Err(e) => {
+                    tracing::error!("peek error for {}: {}", remote_addr, e);
+                }
+                _ => {}
+            }
+        });
+    }
 }
 
 async fn new_room() -> Redirect {
@@ -2639,147 +2693,304 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    if room_id.len() > 64 || !room_id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return (axum::http::StatusCode::BAD_REQUEST, "Invalid room ID").into_response();
+    }
+    tracing::info!("WebSocket upgrade request for room: {}", room_id);
     ws.on_upgrade(move |socket| handle_socket(socket, room_id, state.rooms))
 }
 
 async fn handle_socket(socket: WebSocket, room_id: String, rooms: RoomMap) {
+
+    tracing::info!("handle_socket started for room: {}", room_id);
+
     let (mut user_ws_tx, mut user_ws_rx) = socket.split();
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    
+
     let mut user_id = String::new(); 
+
     let mut is_joined = false;
 
+    let conn_id = Uuid::new_v4().to_string();
+
     tokio::spawn(async move {
+
         while let Some(result) = rx.recv().await {
+
             if let Ok(msg) = result {
+
                 if user_ws_tx.send(msg).await.is_err() {
+
                     break;
+
                 }
+
             }
+
         }
+
     });
 
     while let Some(result) = user_ws_rx.next().await {
+
         if let Ok(msg) = result {
+
             if let Message::Text(text) = msg {
+                if text.len() > 65536 {
+                    continue;
+                }
+
                 if let Ok(parsed) = serde_json::from_str::<SignalMessage>(&text) {
+
                     if !is_joined {
+
                         if parsed.msg_type == "join" {
+
                              user_id = parsed.user_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-                             
-                             {
-                                let mut rooms_lock = rooms.lock().await;
-                                let room = rooms_lock.entry(room_id.clone()).or_insert_with(HashMap::new);
-                                
-                                if room.contains_key(&user_id) {
-                                    break; 
-                                }
-                                
-                                room.insert(user_id.clone(), tx.clone());
+
+                             if user_id.len() > 64 {
+                                 break;
                              }
+
+                             tracing::info!("User {} (conn {}) trying to join room {}", user_id, conn_id, room_id);
+
+                             {
+
+                                let mut rooms_lock = rooms.lock().await;
+
+                                let room = rooms_lock.entry(room_id.clone()).or_insert_with(HashMap::new);
+
+                                if room.len() >= 20 && !room.contains_key(&user_id) {
+                                    break;
+                                }
+
+                                if let Some((old_conn_id, _)) = room.insert(user_id.clone(), (conn_id.clone(), tx.clone())) {
+
+                                    tracing::warn!("User {} replaced old connection {}", user_id, old_conn_id);
+
+                                }
+
+                             }
+
                              is_joined = true;
-                             
+
+                             tracing::info!("User {} (conn {}) joined room {}", user_id, conn_id, room_id);
+
                              let notify_data = parsed.data.clone();
+
                              let notify_msg = serde_json::to_string(&SignalMessage {
+
                                 msg_type: "user-joined".into(),
+
                                 user_id: Some(user_id.clone()),
+
                                 target: None,
+
                                 data: notify_data,
+
                             }).unwrap();
 
                             let rooms_lock = rooms.lock().await;
+
                             if let Some(room) = rooms_lock.get(&room_id) {
-                                for (uid, tx) in room.iter() {
+
+                                for (uid, (_, tx)) in room.iter() {
+
                                     if *uid != user_id {
+
                                         let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+
                                     }
+
                                 }
+
                             }
+
                         }
+
                     } else {
+
                         let rooms_lock = rooms.lock().await;
+
                         if let Some(room) = rooms_lock.get(&room_id) {
+
                             if parsed.msg_type == "update-user" {
+
                                 let notify_data = parsed.data.clone();
+
                                 let notify_msg = serde_json::to_string(&SignalMessage {
+
                                     msg_type: "user-update".into(),
+
                                     user_id: Some(user_id.clone()),
+
                                     target: None,
+
                                     data: notify_data,
+
                                 }).unwrap();
 
-                                for (uid, tx) in room.iter() {
+                                for (uid, (_, tx)) in room.iter() {
+
                                     if *uid != user_id {
+
                                         let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+
                                     }
+
                                 }
+
                             } else if parsed.msg_type == "cam-toggle" {
+
                                 let notify_data = parsed.data.clone();
+
                                 let notify_msg = serde_json::to_string(&SignalMessage {
+
                                     msg_type: "cam-toggle".into(),
+
                                     user_id: Some(user_id.clone()),
+
                                     target: None,
+
                                     data: notify_data,
+
                                 }).unwrap();
 
-                                for (uid, tx) in room.iter() {
+                                for (uid, (_, tx)) in room.iter() {
+
                                     if *uid != user_id {
+
                                         let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+
                                     }
+
                                 }
+
                             } else if parsed.msg_type == "screen-toggle" {
+
                                 let notify_data = parsed.data.clone();
+
                                 let notify_msg = serde_json::to_string(&SignalMessage {
+
                                     msg_type: "screen-toggle".into(),
+
                                     user_id: Some(user_id.clone()),
+
                                     target: None,
+
                                     data: notify_data,
+
                                 }).unwrap();
 
-                                for (uid, tx) in room.iter() {
+                                for (uid, (_, tx)) in room.iter() {
+
                                     if *uid != user_id {
+
                                         let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+
                                     }
+
                                 }
+
                             } else if let Some(ref target_id) = parsed.target {
-                                if let Some(target_tx) = room.get(target_id) {
+
+                                if let Some((_, target_tx)) = room.get(target_id) {
+
                                     let mut forwarded_msg = parsed.clone();
+
                                     forwarded_msg.user_id = Some(user_id.clone());
+
                                     let forwarded_text = serde_json::to_string(&forwarded_msg).unwrap();
+
                                     let _ = target_tx.send(Ok(Message::Text(forwarded_text.into())));
+
                                 }
+
                             }
+
                         }
+
                     }
+
                 }
+
             } else if let Message::Close(_) = msg {
+
                 break;
+
             }
+
         } else {
+
             break;
+
         }
+
     }
 
     {
-        let mut rooms_lock = rooms.lock().await;
-        if let Some(room) = rooms_lock.get_mut(&room_id) {
-            if is_joined {
-                room.remove(&user_id);
-                if room.is_empty() {
-                    rooms_lock.remove(&room_id);
-                } else {
-                    let notify_msg = serde_json::to_string(&SignalMessage {
-                        msg_type: "user-left".into(),
-                        user_id: Some(user_id.clone()),
-                        target: None,
-                        data: None,
-                    }).unwrap();
 
-                    for (_, tx) in room.iter() {
-                        let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+        let mut rooms_lock = rooms.lock().await;
+
+        if let Some(room) = rooms_lock.get_mut(&room_id) {
+
+            if is_joined {
+
+                let should_remove = if let Some((current_conn_id, _)) = room.get(&user_id) {
+
+                    *current_conn_id == conn_id
+
+                } else {
+
+                    false
+
+                };
+
+                if should_remove {
+
+                    room.remove(&user_id);
+
+                    if room.is_empty() {
+
+                        rooms_lock.remove(&room_id);
+
                     }
+
+                    else {
+
+                        let notify_msg = serde_json::to_string(&SignalMessage {
+
+                            msg_type: "user-left".into(),
+
+                            user_id: Some(user_id.clone()),
+
+                            target: None,
+
+                            data: None,
+
+                        }).unwrap();
+
+                        for (_, (_, tx)) in room.iter() {
+
+                            let _ = tx.send(Ok(Message::Text(notify_msg.clone().into())));
+
+                        }
+
+                    }
+
+                    tracing::info!("User {} (conn {}) removed from room {}", user_id, conn_id, room_id);
+
+                } else {
+
+                    tracing::info!("User {} (conn {}) disconnected but was already replaced", user_id, conn_id);
+
                 }
+
             }
+
         }
+
     }
+
 }
