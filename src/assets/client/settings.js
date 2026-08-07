@@ -92,34 +92,29 @@
             const file = input.files[0];
             if (!file) return;
 
-            const maxFileBytes = file.type === 'image/gif'
-                ? MAX_GIF_AVATAR_FILE_BYTES
-                : MAX_IMAGE_UPLOAD_FILE_BYTES;
-            if (file.size > maxFileBytes) {
-                alert(file.type === 'image/gif'
-                    ? "GIF is too large! Maximum allowed size is 10MB."
-                    : "File is too large! Maximum allowed size is 15MB.");
+            if (file.size > MAX_AVATAR_UPLOAD_SANITY_BYTES) {
+                alert("File is too large! Maximum allowed size is 30MB.");
                 input.value = '';
                 return;
             }
 
             if (file.type === 'image/gif') {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const gifDataUrl = e.target.result;
-                    newAvatarCandidate = gifDataUrl;
-                    newAvatarCandidateIsGif = true;
-                    extractGifFirstFrame(gifDataUrl).then(staticFrame => {
-                        newAvatarCandidateStaticFrame = staticFrame;
-                        settingsAvatarPreview.src = staticFrame || gifDataUrl;
-                        settingsAvatarPreview.classList.remove('hidden');
-                        settingsAvatarPlaceholder.classList.add('hidden');
-                        const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
-                        if (removeBtn) removeBtn.classList.remove('hidden');
-                        saveSettings();
-                    });
-                };
-                reader.readAsDataURL(file);
+                // Oversized GIFs are auto-resized browser-side (animation
+                // preserved) to fit the server's avatar cap.
+                processGifAvatar(file).then(result => {
+                    newAvatarCandidate = result.avatar;
+                    newAvatarCandidateIsGif = result.isGif;
+                    newAvatarCandidateStaticFrame = result.staticFrame;
+                    settingsAvatarPreview.src = result.staticFrame || result.avatar;
+                    settingsAvatarPreview.classList.remove('hidden');
+                    settingsAvatarPlaceholder.classList.add('hidden');
+                    const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
+                    if (removeBtn) removeBtn.classList.remove('hidden');
+                    saveSettings();
+                }).catch(err => {
+                    console.error("GIF avatar processing failed:", err);
+                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+                });
             } else {
                 resizeImageForAvatar(file).then(dataUrl => {
                     openCropModal(dataUrl, 'settings');
@@ -441,8 +436,9 @@
                 format: 'jpeg',
                 quality: 0.8
             }).then(function(base64) {
+                return fitStaticDataUrl(base64).then(function(fitBase64) {
                 if (currentCropTarget === 'setup') {
-                    userAvatar = base64;
+                    userAvatar = fitBase64;
                     userAvatarIsGif = false;
                     userAvatarStaticFrame = null;
                     avatarPreview.src = userAvatar;
@@ -452,7 +448,7 @@
                     if (removeBtn) removeBtn.classList.remove('hidden');
                     savePreferences();
                 } else if (currentCropTarget === 'settings') {
-                    newAvatarCandidate = base64;
+                    newAvatarCandidate = fitBase64;
                     newAvatarCandidateIsGif = false;
                     newAvatarCandidateStaticFrame = null;
                     settingsAvatarPreview.src = newAvatarCandidate;
@@ -465,5 +461,6 @@
                     return;
                 }
                 closeCropModal();
+                });
             });
         }

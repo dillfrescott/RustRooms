@@ -17,7 +17,7 @@ fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(|authority| authority.host().to_lowercase())
 }
 
-fn host_is_allowed(headers: &axum::http::HeaderMap, allowed_host: &str) -> bool {
+pub(crate) fn host_is_allowed(headers: &axum::http::HeaderMap, allowed_host: &str) -> bool {
     request_host(headers).is_some_and(|host| host.eq_ignore_ascii_case(allowed_host))
 }
 
@@ -53,7 +53,7 @@ pub(crate) async fn new_room(
         } else {
             // Validate custom room name: alphanumeric, hyphens, underscores only, max length
             let trimmed = custom_name.trim();
-            if trimmed.len() > MAX_ROOM_ID_LEN
+            if trimmed.chars().count() > MAX_ROOM_ID_LEN
                 || trimmed.is_empty()
                 || !trimmed
                     .chars()
@@ -74,13 +74,25 @@ pub(crate) async fn new_room(
 }
 
 pub(crate) async fn redirect_room_trailing_slash(Path(room_id): Path<String>) -> Redirect {
-    Redirect::to(&format!("/{}", room_id))
+    // Validate before echoing into the Location header: control characters
+    // (e.g. %0d%0a) would make Redirect::to panic.
+    if is_valid_room_id(&room_id) {
+        Redirect::to(&format!("/{}", room_id))
+    } else {
+        Redirect::to("/")
+    }
 }
 
 pub(crate) async fn redirect_channel_trailing_slash(
     Path((room_id, channel_id)): Path<(String, String)>,
 ) -> Redirect {
-    Redirect::to(&format!("/{}/{}", room_id, channel_id))
+    if is_valid_room_id(&room_id)
+        && let Some(channel_id) = normalize_channel_id(&channel_id)
+    {
+        Redirect::to(&format!("/{}/{}", room_id, channel_id))
+    } else {
+        Redirect::to("/")
+    }
 }
 
 pub(crate) async fn redirect_new_trailing_slash() -> Redirect {
@@ -90,7 +102,13 @@ pub(crate) async fn redirect_new_trailing_slash() -> Redirect {
 pub(crate) async fn redirect_ws_trailing_slash(
     Path((room_id, channel_id)): Path<(String, String)>,
 ) -> Redirect {
-    Redirect::to(&format!("/ws/{}/{}", room_id, channel_id))
+    if is_valid_room_id(&room_id)
+        && let Some(channel_id) = normalize_channel_id(&channel_id)
+    {
+        Redirect::to(&format!("/ws/{}/{}", room_id, channel_id))
+    } else {
+        Redirect::to("/")
+    }
 }
 
 pub(crate) async fn index(

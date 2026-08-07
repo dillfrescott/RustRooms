@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::Mutex;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UserStatus {
     pub nickname: String,
@@ -52,8 +52,10 @@ pub(crate) const ROOM_EMPTY_GRACE_SECS: u64 = 120;
 pub(crate) const MAX_ROOM_ID_LEN: usize = 64;
 pub(crate) const MAX_CHANNEL_ID_LEN: usize = 32;
 pub(crate) const MAX_NICKNAME_LEN: usize = 32;
-// A 10 MiB GIF expands to roughly 13.34 MiB when represented as a base64 data URL.
-pub(crate) const MAX_AVATAR_DATA_LEN: usize = 14 * 1024 * 1024;
+// Avatar data URLs are relayed to every member of a channel and to every cluster
+// node on every join/update, so the cap must stay small to bound amplification.
+// 2 MiB of base64 is roughly 1.5 MiB of raw image data.
+pub(crate) const MAX_AVATAR_DATA_LEN: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_STATIC_FRAME_DATA_LEN: usize = 512 * 1024;
 pub(crate) const CLIENT_WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 // Cluster join messages contain the profile in both status and signaling data.
@@ -62,6 +64,12 @@ pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 32;
 pub(crate) const CLUSTER_BROADCAST_CAPACITY: usize = 64;
 pub(crate) const MESSAGE_RATE_WINDOW_SECS: u64 = 10;
 pub(crate) const MAX_MESSAGES_PER_RATE_WINDOW: u32 = 240;
+// Byte budget per rate window: bounds JSON parse work even for huge frames.
+// Plenty for a join (avatar + static frame) plus profile updates and signaling.
+pub(crate) const MAX_BYTES_PER_RATE_WINDOW: usize = 16 * 1024 * 1024;
+// Cap for relayed message payloads (signaling, cam/screen toggles, identify).
+// Sized to fit a maximum-size avatar plus static frame.
+pub(crate) const MAX_RELAY_DATA_LEN: usize = 3 * 1024 * 1024;
 pub(crate) const PROFILE_IMAGE_UPDATE_COOLDOWN_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

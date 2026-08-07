@@ -1,7 +1,7 @@
 use crate::state::*;
 use axum::{
     extract::{
-        Query, State,
+        State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
@@ -19,11 +19,20 @@ use uuid::Uuid;
 type PeerUsers = Arc<Mutex<HashSet<(String, String, String)>>>;
 
 pub(crate) async fn cluster_ws_handler(
-    Query(params): Query<HashMap<String, String>>,
     ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let key = params.get("key").cloned().unwrap_or_default();
+    let key = headers
+        .get("X-Cluster-Key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let peer_node_id = headers
+        .get("X-Node-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
     if let Some(ref cluster_key) = state.cluster_key {
         if key != *cluster_key {
             return (axum::http::StatusCode::FORBIDDEN, "Invalid cluster key").into_response();
@@ -31,9 +40,7 @@ pub(crate) async fn cluster_ws_handler(
     } else {
         return (axum::http::StatusCode::FORBIDDEN, "Clustering not enabled").into_response();
     }
-    if let Some(peer_node_id) = params.get("node_id")
-        && *peer_node_id == state.node_id
-    {
+    if !peer_node_id.is_empty() && peer_node_id == state.node_id {
         return (axum::http::StatusCode::BAD_REQUEST, "Self connection").into_response();
     }
     ws.max_frame_size(CLUSTER_WS_MAX_MESSAGE_SIZE)
@@ -44,11 +51,12 @@ pub(crate) async fn cluster_ws_handler(
 async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
     let source_id = Uuid::new_v4().to_string();
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (write_tx, mut write_rx) = tokio::sync::mpsc::channel::<String>(OUTBOUND_QUEUE_CAPACITY);
+    let (write_tx, mut write_rx) =
+        tokio::sync::mpsc::channel::<Message>(OUTBOUND_QUEUE_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = write_rx.recv().await {
-            if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+            if ws_tx.send(msg).await.is_err() {
                 break;
             }
         }
@@ -82,7 +90,7 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
                         signal_msg: None,
                     };
                     if let Ok(json) = serde_json::to_string(&cm) {
-                        let _ = write_tx.send(json).await;
+                        let _ = write_tx.send(Message::Text(json.into())).await;
                     }
                 }
             }
@@ -94,11 +102,21 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
         loop {
             match cluster_rx.recv().await {
                 Ok(msg) => {
-                    if write_tx_fwd.send(msg).await.is_err() {
+                    if write_tx_fwd
+                        .send(Message::Text(msg.into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                // If we lagged, we silently skipped state changes (user-left,
+                // kicks, renames...) and would stay permanently desynced.
+                // Close the connection so the peer reconnects and resyncs.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let _ = write_tx_fwd.send(Message::Close(None)).await;
+                    break;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
@@ -284,20 +302,27 @@ async fn connect_to_peer(
     let source_id = Uuid::new_v4().to_string();
     let cluster_key = state.cluster_key.as_ref().ok_or("No cluster key")?;
     let mut full_url = url::Url::parse(url)?;
-    full_url
-        .query_pairs_mut()
-        .append_pair("key", cluster_key)
-        .append_pair("node_id", &state.node_id);
+    full_url.set_query(None);
 
-    let (ws_stream, _) = connect_async(full_url.as_str()).await?;
+    // Authenticate via headers rather than query parameters so the key
+    // doesn't leak into proxy and access logs.
+    let request = axum::http::Request::builder()
+        .uri(full_url.as_str())
+        .header("X-Cluster-Key", cluster_key)
+        .header("X-Node-Id", &state.node_id)
+        .body(())
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+
+    let (ws_stream, _) = connect_async(request).await?;
     println!("CLUSTER: Connected to peer {}", url);
 
     let (mut write, mut read) = ws_stream.split();
-    let (write_tx, mut write_rx) = tokio::sync::mpsc::channel::<String>(OUTBOUND_QUEUE_CAPACITY);
+    let (write_tx, mut write_rx) =
+        tokio::sync::mpsc::channel::<WsMessage>(OUTBOUND_QUEUE_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = write_rx.recv().await {
-            if write.send(WsMessage::Text(msg.into())).await.is_err() {
+            if write.send(msg).await.is_err() {
                 break;
             }
         }
@@ -331,7 +356,7 @@ async fn connect_to_peer(
                         signal_msg: None,
                     };
                     if let Ok(json) = serde_json::to_string(&cm) {
-                        let _ = write_tx.send(json).await;
+                        let _ = write_tx.send(WsMessage::Text(json.into())).await;
                     }
                 }
             }
@@ -343,11 +368,20 @@ async fn connect_to_peer(
         loop {
             match cluster_rx.recv().await {
                 Ok(msg) => {
-                    if write_tx_fwd.send(msg).await.is_err() {
+                    if write_tx_fwd
+                        .send(WsMessage::Text(msg.into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                // Lagged broadcasts mean skipped state changes; force a
+                // reconnect so the initial sync resynchronizes everything.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let _ = write_tx_fwd.send(WsMessage::Close(None)).await;
+                    break;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
@@ -555,7 +589,7 @@ async fn cleanup_dead_remote_users(
     affected_rooms
 }
 
-async fn schedule_empty_room_cleanup(state: &AppState, room_id: &str) {
+pub(crate) async fn schedule_empty_room_cleanup(state: &AppState, room_id: &str) {
     let has_local_room = state.rooms.lock().await.contains_key(room_id);
     let has_remote_users = state
         .remote_users
@@ -636,7 +670,7 @@ async fn schedule_empty_room_cleanup(state: &AppState, room_id: &str) {
     });
 }
 
-fn remove_remote_user(
+pub(crate) fn remove_remote_user(
     remote_users: &mut HashMap<String, HashMap<String, HashMap<String, UserStatus>>>,
     room_id: &str,
     channel_id: &str,
@@ -735,14 +769,57 @@ async fn handle_cluster_message(
             }
         }
         "user-left" | "user-kicked" => {
-            let removed = {
+            let removed_remote = {
                 let mut rl = remote_users.lock().await;
                 remove_remote_user(&mut rl, &msg.room_id, &msg.channel_id, &msg.user_id)
             };
-            if !removed {
+
+            // A kick may target a user hosted on this node (cross-node kick):
+            // remove them from the local channel and close their socket.
+            let removed_local = if msg.msg_type == "user-kicked" {
+                let mut rooms_lock = rooms.lock().await;
+                let mut removed_local = false;
+                let mut victim_tx = None;
+                if let Some(room) = rooms_lock.get_mut(&msg.room_id)
+                    && let Some(channel) = room.get_mut(&msg.channel_id)
+                    && let Some((tx, _)) = channel.remove(&msg.user_id)
+                {
+                    removed_local = true;
+                    victim_tx = Some(tx);
+                }
+                if removed_local {
+                    let kick_notify = serde_json::to_string(&SignalMessage {
+                        msg_type: "user-kicked".into(),
+                        user_id: Some(msg.user_id.clone()),
+                        target: None,
+                        data: None,
+                    })
+                    .unwrap();
+                    let rooms_lock = rooms.lock().await;
+                    if let Some(room) = rooms_lock.get(&msg.room_id)
+                        && let Some(channel) = room.get(&msg.channel_id)
+                    {
+                        for (_, (tx, _)) in channel.iter() {
+                            let _ = tx.try_send(Ok(Message::Text(kick_notify.clone().into())));
+                        }
+                    }
+                    drop(rooms_lock);
+                    if let Some(victim_tx) = victim_tx {
+                        let _ = victim_tx.try_send(Ok(Message::Text(kick_notify.into())));
+                        let _ = victim_tx.try_send(Ok(Message::Close(None)));
+                    }
+                }
+                removed_local
+            } else {
+                false
+            };
+
+            if !removed_remote && !removed_local {
                 return;
             }
-            {
+            // When the victim was local, the removal block above already
+            // notified the channel; only notify again for remote removals.
+            if !removed_local {
                 let mtype = if msg.msg_type == "user-kicked" {
                     "user-kicked"
                 } else {
@@ -973,6 +1050,23 @@ pub(crate) fn cluster_broadcast(
     }
 }
 
+// Sidebar presence list. Avatars are excluded: they're delivered once via
+// existing-users / user-joined / identify, and re-serializing multi-MB
+// data URLs here on every event would amplify into a DoS.
+fn presence_status(status: &UserStatus) -> UserStatus {
+    UserStatus {
+        nickname: status.nickname.clone(),
+        avatar: None,
+        is_gif: false,
+        static_frame: None,
+        is_muted: status.is_muted,
+        is_deafened: status.is_deafened,
+        is_screen_sharing: status.is_screen_sharing,
+        is_low_bandwidth_mode: status.is_low_bandwidth_mode,
+        is_on_the_go_mode: status.is_on_the_go_mode,
+    }
+}
+
 pub(crate) async fn broadcast_channel_list(
     rooms: &RoomMap,
     remote_users: &RemoteUsersMap,
@@ -996,7 +1090,7 @@ pub(crate) async fn broadcast_channel_list(
         for (cid, users) in room.iter() {
             let mut user_map = HashMap::new();
             for (user_id, (_, status)) in users.iter() {
-                user_map.insert(user_id.clone(), status.clone());
+                user_map.insert(user_id.clone(), presence_status(status));
             }
             let created_at = times_lock
                 .get(room_id)
@@ -1029,7 +1123,7 @@ pub(crate) async fn broadcast_channel_list(
                     created_at,
                 });
             for (user_id, status) in users.iter() {
-                entry.users.insert(user_id.clone(), status.clone());
+                entry.users.insert(user_id.clone(), presence_status(status));
             }
         }
     }
@@ -1114,5 +1208,38 @@ mod tests {
             &Uuid::nil().to_string()
         ));
         assert!(remote_users.is_empty());
+    }
+
+    #[test]
+    fn presence_status_strips_avatar_payloads_but_keeps_status_flags() {
+        let mut status = test_user_status();
+        status.nickname = "Alice".to_string();
+        status.avatar = Some("x".repeat(MAX_AVATAR_DATA_LEN));
+        status.static_frame = Some("y".repeat(MAX_STATIC_FRAME_DATA_LEN));
+        status.is_gif = true;
+        status.is_muted = true;
+        status.is_screen_sharing = true;
+
+        let presence = presence_status(&status);
+        assert_eq!(presence.nickname, "Alice");
+        assert!(presence.avatar.is_none());
+        assert!(presence.static_frame.is_none());
+        assert!(!presence.is_gif);
+        assert!(presence.is_muted);
+        assert!(presence.is_deafened == status.is_deafened);
+        assert!(presence.is_screen_sharing);
+        assert!(presence.is_low_bandwidth_mode == status.is_low_bandwidth_mode);
+        assert!(presence.is_on_the_go_mode == status.is_on_the_go_mode);
+    }
+
+    #[test]
+    fn update_user_changes_are_detected_for_skip_on_noop() {
+        let mut status = test_user_status();
+        status.is_muted = true;
+        let unchanged = status.clone();
+        assert_eq!(status, unchanged);
+
+        status.nickname = "Bob".to_string();
+        assert_ne!(status, unchanged);
     }
 }

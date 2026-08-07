@@ -11,8 +11,7 @@
         let parts = window.location.pathname.split('/').filter(p => p !== '');
         let roomId = decodePathSegment(parts[0] || '');
         let channelId = decodePathSegment(parts[1] || '').trim() || (roomId ? 'General' : '');
-        const MAX_IMAGE_UPLOAD_FILE_BYTES = 15 * 1024 * 1024;
-        const MAX_GIF_AVATAR_FILE_BYTES = 10 * 1024 * 1024;
+        const MAX_AVATAR_UPLOAD_SANITY_BYTES = 30 * 1024 * 1024;
         if (channelId.toLowerCase() === 'general') {
             channelId = 'General';
         }
@@ -75,6 +74,10 @@
         let activeSpeakers = {};
         let peerLowBandwidthStatus = {};
         let peerOnTheGoStatus = {};
+        // Avatar payloads are stripped from room-list; this cache restores them
+        // in the sidebar for users seen via existing-users / user-joined /
+        // identify / user-update.
+        let userAvatarCache = {};
 
         let persistentUserId = localStorage.getItem('rustrooms_user_id');
         if (!persistentUserId) {
@@ -2038,34 +2041,29 @@
             const file = input.files[0];
             if (!file) return;
 
-            const maxFileBytes = file.type === 'image/gif'
-                ? MAX_GIF_AVATAR_FILE_BYTES
-                : MAX_IMAGE_UPLOAD_FILE_BYTES;
-            if (file.size > maxFileBytes) {
-                alert(file.type === 'image/gif'
-                    ? "GIF is too large! Maximum allowed size is 10MB."
-                    : "File is too large! Maximum allowed size is 15MB.");
+            if (file.size > MAX_AVATAR_UPLOAD_SANITY_BYTES) {
+                alert("File is too large! Maximum allowed size is 30MB.");
                 input.value = '';
                 return;
             }
 
             if (file.type === 'image/gif') {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const gifDataUrl = e.target.result;
-                    userAvatar = gifDataUrl;
-                    userAvatarIsGif = true;
-                    extractGifFirstFrame(gifDataUrl).then(staticFrame => {
-                        userAvatarStaticFrame = staticFrame;
-                        avatarPreview.src = staticFrame || gifDataUrl;
-                        avatarPreview.classList.remove('hidden');
-                        avatarPlaceholder.classList.add('hidden');
-                        const removeBtn = document.getElementById('btnRemoveSetupAvatar');
-                        if (removeBtn) removeBtn.classList.remove('hidden');
-                        savePreferences();
-                    });
-                };
-                reader.readAsDataURL(file);
+                // Oversized GIFs are auto-resized browser-side (animation
+                // preserved) to fit the server's avatar cap.
+                processGifAvatar(file).then(result => {
+                    userAvatar = result.avatar;
+                    userAvatarIsGif = result.isGif;
+                    userAvatarStaticFrame = result.staticFrame;
+                    avatarPreview.src = result.staticFrame || result.avatar;
+                    avatarPreview.classList.remove('hidden');
+                    avatarPlaceholder.classList.add('hidden');
+                    const removeBtn = document.getElementById('btnRemoveSetupAvatar');
+                    if (removeBtn) removeBtn.classList.remove('hidden');
+                    savePreferences();
+                }).catch(err => {
+                    console.error("GIF avatar processing failed:", err);
+                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+                });
             } else {
                 resizeImageForAvatar(file).then(dataUrl => {
                     openCropModal(dataUrl, 'setup');

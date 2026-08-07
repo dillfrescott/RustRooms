@@ -198,6 +198,8 @@ pub(crate) async fn app_js() -> impl IntoResponse {
     let turn_credential =
         serde_json::to_string(&turn_credential).unwrap_or_else(|_| "\"\"".to_string());
     let javascript = concat!(
+        include_str!("assets/client/gifenc.js"),
+        include_str!("assets/client/gif_resize.js"),
         include_str!("assets/client/core.js"),
         include_str!("assets/client/interface.js"),
         include_str!("assets/client/connection.js"),

@@ -996,11 +996,18 @@
                     const isMuted = u.isMuted;
                     const isDeafened = u.isDeafened;
                     const isScreenSharing = u.isScreenSharing === true;
+                    // room-list no longer carries avatar payloads; fall back to
+                    // the cache populated from existing-users / user-joined /
+                    // identify / user-update events.
+                    const cached = userAvatarCache[uid];
+                    const avatar = u.avatar || (cached ? cached.avatar : null) || null;
+                    const isGif = !!(u.isGif || (cached ? cached.isGif : false));
+                    const staticFrame = u.staticFrame || (cached ? cached.staticFrame : null) || null;
 
                     usersHtml += `
                         <div class="room-user-row pointer-events-auto cursor-pointer" data-user-id="${uid}" data-user-nickname="${escapeHtml(u.nickname)}" onclick="handleUserClick(this)" oncontextmenu="handleUserContextMenu(event, this)" ontouchstart="handleUserTouchStart(event, this)" ontouchend="handleUserTouchEnd(event)" ontouchmove="handleUserTouchCancel()">
                             <div class="mini-avatar">
-                                ${u.avatar ? (u.isGif && u.staticFrame ? `<img src="${escapeHtml(u.staticFrame)}" data-gif-src="${escapeHtml(u.avatar)}" data-static-src="${escapeHtml(u.staticFrame)}">` : `<img src="${escapeHtml(u.avatar)}">`) : `<div class="mini-avatar-placeholder">${escapeHtml(u.nickname.charAt(0).toUpperCase())}</div>`}
+                                ${avatar ? (isGif && staticFrame ? `<img src="${escapeHtml(staticFrame)}" data-gif-src="${escapeHtml(avatar)}" data-static-src="${escapeHtml(staticFrame)}">` : `<img src="${escapeHtml(avatar)}">`) : `<div class="mini-avatar-placeholder">${escapeHtml(u.nickname.charAt(0).toUpperCase())}</div>`}
                             </div>
                             <span class="room-user-name">${escapeHtml(u.nickname)}</span>
                             <div class="status-indicators">

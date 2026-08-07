@@ -41,6 +41,7 @@
             peerScreenStatus = {};
             peerScreenHasAudio = {};
             pendingCandidates = {};
+            userAvatarCache = {};
 
             ws = new WebSocket(wsUrl);
 
@@ -156,6 +157,11 @@
                                     try {
                                         if (msg.data && Array.isArray(msg.data.users)) {
                                             msg.data.users.forEach(user => {
+                                                userAvatarCache[user.id] = {
+                                                    avatar: user.status.avatar,
+                                                    isGif: user.status.isGif,
+                                                    staticFrame: user.status.staticFrame
+                                                };
                                                 if (user.status.isScreenSharing !== undefined) {
                                                     peerScreenStatus[user.id] = user.status.isScreenSharing;
                                                 }
@@ -180,7 +186,13 @@
                                         playNotificationSound('join');
                                         const joinedScreenAudio = getScreenAudioFlag(msg.data);
                                         updatePeerTrackHints(msg.userId, msg.data);
-
+                                        if (msg.data) {
+                                            userAvatarCache[msg.userId] = {
+                                                avatar: msg.data.avatar,
+                                                isGif: msg.data.isGif,
+                                                staticFrame: msg.data.staticFrame
+                                            };
+                                        }
                                         if (msg.data.camEnabled !== undefined) {
                                             peerCamStatus[msg.userId] = msg.data.camEnabled;
                                         }
@@ -240,6 +252,7 @@
                                     break;
                                 case 'user-left':
 
+                                    delete userAvatarCache[msg.userId];
                                     if (msg.userId !== persistentUserId) {
                                         playNotificationSound('leave');
                                         removePeer(msg.userId);
@@ -253,6 +266,7 @@
                                     }
                                     break;
                                 case 'user-kicked':
+                                    delete userAvatarCache[msg.userId];
                                     if (msg.userId === persistentUserId) {
                                         hasLeftRoom = true;
                                         alert("You have been kicked from the room.");
@@ -275,6 +289,13 @@
                                     break;
                                 case 'user-update':
                                      updatePeerTrackHints(msg.userId, msg.data);
+                                     if (msg.data) {
+                                         userAvatarCache[msg.userId] = {
+                                             avatar: msg.data.avatar,
+                                             isGif: msg.data.isGif,
+                                             staticFrame: msg.data.staticFrame
+                                         };
+                                     }
                                      if (msg.data.isLowBandwidthMode !== undefined) {
                                          peerLowBandwidthStatus[msg.userId] = msg.data.isLowBandwidthMode;
                                          updateAllSenderBitrates();
@@ -322,6 +343,13 @@
                                     try {
                                         const identifiedScreenAudio = getScreenAudioFlag(msg.data);
                                         updatePeerTrackHints(msg.userId, msg.data);
+                                        if (msg.data) {
+                                            userAvatarCache[msg.userId] = {
+                                                avatar: msg.data.avatar,
+                                                isGif: msg.data.isGif,
+                                                staticFrame: msg.data.staticFrame
+                                            };
+                                        }
                                         if (msg.data.camEnabled !== undefined) {
                                             peerCamStatus[msg.userId] = msg.data.camEnabled;
                                         }
