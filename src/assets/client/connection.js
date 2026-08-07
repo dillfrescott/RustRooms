@@ -1521,6 +1521,10 @@
 
         function removePeer(userId) {
             cleanupAudioMonitor(`wrapper-${userId}`);
+            if (typeof stopGifFrameAnimation === 'function') {
+                stopGifFrameAnimation(`wrapper-${userId}`);
+                stopGifFrameAnimation(`wrapper-${userId}-sidebar`);
+            }
 
             if (peers[userId]) {
                 try {

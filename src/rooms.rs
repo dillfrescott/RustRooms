@@ -479,15 +479,17 @@ pub(crate) async fn handle_socket(
                                     .is_some_and(|(stored_tx, _)| stored_tx.same_channel(&tx))
                             };
                             if still_in_channel {
-                                let rooms_lock = rooms.lock().await;
-                                if let Some(room) = rooms_lock.get(&room_id)
-                                    && let Some(channel) = room.get(&channel_id)
                                 {
-                                    for (uid, (tx, _)) in channel.iter() {
-                                        if *uid != user_id {
-                                            let _ = tx.try_send(Ok(Message::Text(
-                                                notify_msg.clone().into(),
-                                            )));
+                                    let rooms_lock = rooms.lock().await;
+                                    if let Some(room) = rooms_lock.get(&room_id)
+                                        && let Some(channel) = room.get(&channel_id)
+                                    {
+                                        for (uid, (tx, _)) in channel.iter() {
+                                            if *uid != user_id {
+                                                let _ = tx.try_send(Ok(Message::Text(
+                                                    notify_msg.clone().into(),
+                                                )));
+                                            }
                                         }
                                     }
                                 }

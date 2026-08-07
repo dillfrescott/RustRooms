@@ -1809,12 +1809,18 @@
                         avatarPlaceholder.classList.add('hidden');
                         const removeBtn = document.getElementById('btnRemoveSetupAvatar');
                         if (removeBtn) removeBtn.classList.remove('hidden');
+                        if (userAvatarIsGif) {
+                            loopGifInElement(avatarPreview, userAvatar);
+                        }
                     }
                     if (document.getElementById('settingsAvatarPreview')) {
                         const sap = document.getElementById('settingsAvatarPreview');
                         sap.src = displaySrc;
                         sap.classList.remove('hidden');
                         document.getElementById('settingsAvatarPlaceholder').classList.add('hidden');
+                        if (userAvatarIsGif) {
+                            loopGifInElement(sap, userAvatar);
+                        }
                     }
                     if (userAvatarIsGif && !userAvatarStaticFrame) {
                         extractGifFirstFrame(userAvatar).then(sf => {
@@ -2069,9 +2075,17 @@
                     userAvatar = result.avatar;
                     userAvatarIsGif = result.isGif;
                     userAvatarStaticFrame = result.staticFrame;
+                    userAvatarCache[persistentUserId] = {
+                        avatar: userAvatar,
+                        isGif: userAvatarIsGif,
+                        staticFrame: userAvatarStaticFrame
+                    };
                     avatarPreview.src = result.staticFrame || result.avatar;
                     avatarPreview.classList.remove('hidden');
                     avatarPlaceholder.classList.add('hidden');
+                    if (result.isGif) {
+                        loopGifInElement(avatarPreview, result.avatar);
+                    }
                     const removeBtn = document.getElementById('btnRemoveSetupAvatar');
                     if (removeBtn) removeBtn.classList.remove('hidden');
                     savePreferences();
@@ -2092,6 +2106,7 @@
         }
 
         function removeSetupAvatar() {
+            stopGifPreviewLoop(avatarPreview);
             userAvatar = null;
             userAvatarIsGif = false;
             userAvatarStaticFrame = null;
@@ -2104,6 +2119,7 @@
         }
 
         function removeSettingsAvatar() {
+            stopGifPreviewLoop(settingsAvatarPreview);
             newAvatarCandidate = null;
             newAvatarCandidateIsGif = false;
             newAvatarCandidateStaticFrame = null;
@@ -2152,6 +2168,144 @@
 
         let gifSpeakingState = {};
 
+        // JS-driven GIF playback for the speaking animation: overlays a
+        // canvas on the avatar center and steps pre-decoded frames with a
+        // timer. Needed for browsers that never advance GIF frames in <img>
+        // (enterprise AnimationPolicy etc.); falls back to the plain img src
+        // swap when ImageDecoder is unavailable.
+        let gifAnimators = {};
+
+        function stopGifFrameAnimation(targetId) {
+            const entry = gifAnimators[targetId];
+            if (!entry) return;
+            if (entry.animator) {
+                entry.animator.stop();
+            }
+            if (entry.canvas && entry.canvas.parentNode) {
+                entry.canvas.parentNode.removeChild(entry.canvas);
+            }
+            if (entry.centerImg) {
+                entry.centerImg.style.display = '';
+            }
+            delete gifAnimators[targetId];
+        }
+
+        function drawBitmapCover(ctx, canvas, bitmap) {
+            const cw = canvas.clientWidth || bitmap.width;
+            const ch = canvas.clientHeight || bitmap.height;
+            const scale = Math.max(cw / bitmap.width, ch / bitmap.height);
+            const sw = cw / scale;
+            const sh = ch / scale;
+            const sx = (bitmap.width - sw) / 2;
+            const sy = (bitmap.height - sh) / 2;
+            ctx.clearRect(0, 0, cw, ch);
+            ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, cw, ch);
+        }
+
+        function startGifFrameAnimation(targetId, avatar, centerEl, centerImg) {
+            stopGifFrameAnimation(targetId);
+            if (!avatar || !centerEl) return;
+            const canvas = document.createElement('canvas');
+            canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
+            centerEl.appendChild(canvas);
+            gifAnimators[targetId] = { canvas, centerImg };
+            globalThis.createGifAnimator(avatar).then((animator) => {
+                const entry = gifAnimators[targetId];
+                if (!entry) {
+                    // Already stopped while decoding.
+                    return;
+                }
+                if (!animator) {
+                    stopGifFrameAnimation(targetId);
+                    return;
+                }
+                // Hide the static img only now, so the avatar never blanks
+                // during frame decoding.
+                if (centerImg) centerImg.style.display = 'none';
+                const ctx = canvas.getContext('2d');
+                const sizeCanvas = () => {
+                    const cw = centerEl.clientWidth || 120;
+                    const ch = centerEl.clientHeight || 120;
+                    if (canvas.width !== cw || canvas.height !== ch) {
+                        canvas.width = cw;
+                        canvas.height = ch;
+                    }
+                };
+                sizeCanvas();
+                animator.start((bitmap) => {
+                    sizeCanvas();
+                    drawBitmapCover(ctx, canvas, bitmap);
+                });
+                entry.animator = animator;
+            }).catch(() => {
+                // Decoding failed (e.g. corrupt avatar); restore the static img.
+                stopGifFrameAnimation(targetId);
+            });
+        }
+
+        const canUseGifAnimator = () => typeof ImageDecoder !== 'undefined' && globalThis.createGifAnimator;
+
+        // Loops a GIF inside an <img> preview (setup/settings screens) via
+        // the JS frame animator, so the animation plays even in browsers
+        // that never advance GIF frames in <img> elements.
+        let gifPreviewLoops = {};
+        let gifPreviewSeq = 0;
+
+        function stopGifPreviewLoop(imgEl) {
+            const key = imgEl && imgEl.dataset ? imgEl.dataset.gifLoopKey : null;
+            if (!key) return;
+            const entry = gifPreviewLoops[key];
+            if (!entry) return;
+            if (entry.animator) {
+                entry.animator.stop();
+            }
+            if (entry.canvas && entry.canvas.parentNode) {
+                entry.canvas.parentNode.removeChild(entry.canvas);
+            }
+            imgEl.style.display = '';
+            delete imgEl.dataset.gifLoopKey;
+            delete gifPreviewLoops[key];
+        }
+
+        function loopGifInElement(imgEl, gifSrc) {
+            if (!imgEl || !gifSrc) return;
+            stopGifPreviewLoop(imgEl);
+            const container = imgEl.parentElement;
+            if (!container) return;
+            const key = 'preview-' + (++gifPreviewSeq);
+            imgEl.dataset.gifLoopKey = key;
+            const canvas = document.createElement('canvas');
+            canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
+            container.appendChild(canvas);
+            imgEl.style.display = 'none';
+            gifPreviewLoops[key] = { canvas };
+            globalThis.createGifAnimator(gifSrc).then((animator) => {
+                const entry = gifPreviewLoops[key];
+                if (!entry || !canvas.parentNode) {
+                    return;
+                }
+                if (!animator) {
+                    stopGifPreviewLoop(imgEl);
+                    return;
+                }
+                const ctx = canvas.getContext('2d');
+                const sizeCanvas = () => {
+                    const cw = container.clientWidth || 80;
+                    const ch = container.clientHeight || 80;
+                    if (canvas.width !== cw || canvas.height !== ch) {
+                        canvas.width = cw;
+                        canvas.height = ch;
+                    }
+                };
+                sizeCanvas();
+                animator.start((frame) => {
+                    sizeCanvas();
+                    drawBitmapCover(ctx, canvas, frame);
+                });
+                entry.animator = animator;
+            });
+        }
+
         function toggleGifAnimation(targetId, isSpeaking) {
             if (targetId === 'local') {
                 if (!userAvatarIsGif || !userAvatar) return;
@@ -2160,11 +2314,22 @@
                 const sidebarImg = document.querySelector(`.room-user-row[data-user-id="${persistentUserId}"] .mini-avatar img`);
                 const staticSrc = userAvatarStaticFrame || userAvatar;
                 if (isSpeaking) {
-                    const animSrc = restartGif(userAvatar);
-                    if (centerImg) centerImg.src = animSrc;
-                    if (bgImg) bgImg.src = animSrc;
-                    if (sidebarImg) sidebarImg.src = animSrc;
+                    if (canUseGifAnimator()) {
+                        const centerEl = centerImg ? centerImg.parentElement : null;
+                        startGifFrameAnimation('local', userAvatar, centerEl, centerImg);
+                        const sidebarContainer = sidebarImg ? sidebarImg.parentElement : null;
+                        startGifFrameAnimation('local-sidebar', userAvatar, sidebarContainer, sidebarImg);
+                        if (bgImg) bgImg.src = staticSrc;
+                        if (sidebarImg) sidebarImg.src = staticSrc;
+                    } else {
+                        const animSrc = restartGif(userAvatar);
+                        if (centerImg) centerImg.src = animSrc;
+                        if (bgImg) bgImg.src = animSrc;
+                        if (sidebarImg) sidebarImg.src = animSrc;
+                    }
                 } else {
+                    stopGifFrameAnimation('local');
+                    stopGifFrameAnimation('local-sidebar');
                     if (centerImg) centerImg.src = staticSrc;
                     if (bgImg) bgImg.src = staticSrc;
                     if (sidebarImg) sidebarImg.src = staticSrc;
@@ -2176,20 +2341,41 @@
                 const avatarCenter = wrapper.querySelector('.avatar-center');
                 if (!avatarCenter) return;
                 const imgs = avatarCenter.querySelectorAll('img');
-                imgs.forEach(img => {
-                    const gifSrc = img.dataset.gifSrc;
-                    const staticSrc = img.dataset.staticSrc;
-                    if (gifSrc && staticSrc) {
-                        img.src = isSpeaking ? restartGif(gifSrc) : staticSrc;
-                    }
-                });
-                const bgImg = wrapper.querySelector('.avatar-img');
-                if (bgImg && bgImg.dataset.gifSrc && bgImg.dataset.staticSrc) {
-                    bgImg.src = isSpeaking ? restartGif(bgImg.dataset.gifSrc) : bgImg.dataset.staticSrc;
-                }
+                const firstImg = imgs.length > 0 ? imgs[0] : null;
+                const firstGif = firstImg ? firstImg.dataset.gifSrc : null;
+                const firstStatic = firstImg ? firstImg.dataset.staticSrc : null;
                 const sidebarImg = document.querySelector(`.room-user-row[data-user-id="${rawUserId}"] .mini-avatar img`);
-                if (sidebarImg && sidebarImg.dataset.gifSrc && sidebarImg.dataset.staticSrc) {
-                    sidebarImg.src = isSpeaking ? restartGif(sidebarImg.dataset.gifSrc) : sidebarImg.dataset.staticSrc;
+                if (isSpeaking && firstGif && firstStatic && canUseGifAnimator()) {
+                    startGifFrameAnimation(targetId, firstGif, avatarCenter, firstImg);
+                    const sidebarContainer = sidebarImg ? sidebarImg.parentElement : null;
+                    startGifFrameAnimation(targetId + '-sidebar', firstGif, sidebarContainer, sidebarImg);
+                    imgs.forEach(img => {
+                        if (img.dataset.staticSrc) img.src = img.dataset.staticSrc;
+                    });
+                } else if (isSpeaking) {
+                    imgs.forEach(img => {
+                        const gifSrc = img.dataset.gifSrc;
+                        const staticSrc = img.dataset.staticSrc;
+                        if (gifSrc && staticSrc) {
+                            img.src = restartGif(gifSrc);
+                        }
+                    });
+                    if (sidebarImg && sidebarImg.dataset.gifSrc && sidebarImg.dataset.staticSrc) {
+                        sidebarImg.src = restartGif(sidebarImg.dataset.gifSrc);
+                    }
+                } else {
+                    stopGifFrameAnimation(targetId);
+                    stopGifFrameAnimation(targetId + '-sidebar');
+                    imgs.forEach(img => {
+                        if (img.dataset.staticSrc) img.src = img.dataset.staticSrc;
+                    });
+                }
+                const bgImg = wrapper.querySelector('.avatar-img');
+                if (bgImg && bgImg.dataset.staticSrc) {
+                    bgImg.src = bgImg.dataset.staticSrc;
+                }
+                if (sidebarImg && sidebarImg.dataset.staticSrc) {
+                    sidebarImg.src = sidebarImg.dataset.staticSrc;
                 }
             }
         }

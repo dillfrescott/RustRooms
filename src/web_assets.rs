@@ -1,14 +1,20 @@
 use axum::{http::header, response::IntoResponse};
 pub(crate) async fn rnnoise_js() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "application/javascript")],
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         include_str!("rnnoise.js"),
     )
 }
 
 pub(crate) async fn rnnoise_processor_js() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "application/javascript")],
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         include_str!("rnnoise_processor.js"),
     )
 }
@@ -40,7 +46,7 @@ pub(crate) async fn manifest_json() -> impl IntoResponse {
 
 pub(crate) async fn service_worker_js() -> impl IntoResponse {
     let sw = r##"
-const CACHE_NAME = 'rustrooms-v1';
+const CACHE_NAME = 'rustrooms-v2';
 const ASSETS = [
     '/icon.svg',
     '/rnnoise.js',
@@ -64,7 +70,15 @@ const ASSETS = [
 
 self.addEventListener('install', (event) => {
     event.waitUntil(
-        caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+        caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
+    );
+});
+
+self.addEventListener('activate', (event) => {
+    event.waitUntil(
+        caches.keys().then((keys) => Promise.all(
+            keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        )).then(() => self.clients.claim())
     );
 });
 
@@ -87,7 +101,13 @@ self.addEventListener('fetch', (event) => {
     );
 });
 "##;
-    ([(header::CONTENT_TYPE, "application/javascript")], sw)
+    (
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        sw,
+    )
 }
 
 pub(crate) async fn icon_svg() -> impl IntoResponse {
@@ -105,13 +125,22 @@ pub(crate) async fn icon_svg() -> impl IntoResponse {
 macro_rules! asset_route {
     ($func:ident, $content_type:expr, $path:expr, str) => {
         pub(crate) async fn $func() -> impl IntoResponse {
-            ([(header::CONTENT_TYPE, $content_type)], include_str!($path))
+            (
+                [
+                    (header::CONTENT_TYPE, $content_type),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                include_str!($path),
+            )
         }
     };
     ($func:ident, $content_type:expr, $path:expr, bytes) => {
         pub(crate) async fn $func() -> impl IntoResponse {
             (
-                [(header::CONTENT_TYPE, $content_type)],
+                [
+                    (header::CONTENT_TYPE, $content_type),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
                 include_bytes!($path).as_slice(),
             )
         }
@@ -210,7 +239,10 @@ pub(crate) async fn app_js() -> impl IntoResponse {
     .replace("{{TURN_CREDENTIAL}}", &turn_credential);
 
     (
-        [(header::CONTENT_TYPE, "application/javascript")],
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         javascript,
     )
 }

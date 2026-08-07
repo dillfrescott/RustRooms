@@ -1280,6 +1280,7 @@
         }
 
         .mini-avatar {
+            position: relative;
             width: 26px;
             height: 26px;
             border-radius: var(--radius-sm);

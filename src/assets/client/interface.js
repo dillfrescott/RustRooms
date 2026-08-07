@@ -1000,9 +1000,17 @@
                     // the cache populated from existing-users / user-joined /
                     // identify / user-update events.
                     const cached = userAvatarCache[uid];
-                    const avatar = u.avatar || (cached ? cached.avatar : null) || null;
-                    const isGif = !!(u.isGif || (cached ? cached.isGif : false));
-                    const staticFrame = u.staticFrame || (cached ? cached.staticFrame : null) || null;
+                    let avatar = u.avatar || (cached ? cached.avatar : null) || null;
+                    let isGif = !!(u.isGif || (cached ? cached.isGif : false));
+                    let staticFrame = u.staticFrame || (cached ? cached.staticFrame : null) || null;
+                    // The room-list strips avatar payloads and self is never in
+                    // the peer cache (existing-users skips self), so use the
+                    // live local profile for the local user's own row.
+                    if (uid === persistentUserId) {
+                        avatar = userAvatar;
+                        isGif = userAvatarIsGif;
+                        staticFrame = userAvatarStaticFrame;
+                    }
 
                     usersHtml += `
                         <div class="room-user-row pointer-events-auto cursor-pointer" data-user-id="${uid}" data-user-nickname="${escapeHtml(u.nickname)}" onclick="handleUserClick(this)" oncontextmenu="handleUserContextMenu(event, this)" ontouchstart="handleUserTouchStart(event, this)" ontouchend="handleUserTouchEnd(event)" ontouchmove="handleUserTouchCancel()">

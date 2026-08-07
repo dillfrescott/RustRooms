@@ -60,7 +60,11 @@
                 settingsAvatarPreview.classList.remove('hidden');
                 settingsAvatarPlaceholder.classList.add('hidden');
                 if (removeBtn) removeBtn.classList.remove('hidden');
+                if (userAvatarIsGif) {
+                    loopGifInElement(settingsAvatarPreview, userAvatar);
+                }
             } else {
+                stopGifPreviewLoop(settingsAvatarPreview);
                 settingsAvatarPreview.classList.add('hidden');
                 settingsAvatarPlaceholder.classList.remove('hidden');
                 if (removeBtn) removeBtn.classList.add('hidden');
@@ -123,6 +127,9 @@
                     settingsAvatarPreview.src = result.staticFrame || result.avatar;
                     settingsAvatarPreview.classList.remove('hidden');
                     settingsAvatarPlaceholder.classList.add('hidden');
+                    if (result.isGif) {
+                        loopGifInElement(settingsAvatarPreview, result.avatar);
+                    }
                     const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
                     if (removeBtn) removeBtn.classList.remove('hidden');
                     saveSettings();
@@ -146,6 +153,11 @@
             userAvatar = newAvatarCandidate;
             userAvatarIsGif = newAvatarCandidateIsGif;
             userAvatarStaticFrame = newAvatarCandidateStaticFrame;
+            userAvatarCache[persistentUserId] = {
+                avatar: userAvatar,
+                isGif: userAvatarIsGif,
+                staticFrame: userAvatarStaticFrame
+            };
             savePreferences();
 
             updateLocalAvatar();
@@ -457,6 +469,7 @@
             }).then(function(base64) {
                 return fitStaticDataUrl(base64).then(function(fitBase64) {
                 if (currentCropTarget === 'setup') {
+                    stopGifPreviewLoop(avatarPreview);
                     userAvatar = fitBase64;
                     userAvatarIsGif = false;
                     userAvatarStaticFrame = null;
@@ -467,6 +480,7 @@
                     if (removeBtn) removeBtn.classList.remove('hidden');
                     savePreferences();
                 } else if (currentCropTarget === 'settings') {
+                    stopGifPreviewLoop(settingsAvatarPreview);
                     newAvatarCandidate = fitBase64;
                     newAvatarCandidateIsGif = false;
                     newAvatarCandidateStaticFrame = null;
