@@ -98,9 +98,24 @@
                 return;
             }
 
+            const processingEl = document.getElementById('settingsAvatarProcessing');
+            const showProcessing = () => {
+                if (processingEl) {
+                    processingEl.classList.remove('hidden');
+                    processingEl.classList.add('flex');
+                }
+            };
+            const hideProcessing = () => {
+                if (processingEl) {
+                    processingEl.classList.add('hidden');
+                    processingEl.classList.remove('flex');
+                }
+            };
+
             if (file.type === 'image/gif') {
                 // Oversized GIFs are auto-resized browser-side (animation
                 // preserved) to fit the server's avatar cap.
+                showProcessing();
                 processGifAvatar(file).then(result => {
                     newAvatarCandidate = result.avatar;
                     newAvatarCandidateIsGif = result.isGif;
@@ -111,12 +126,16 @@
                     const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
                     if (removeBtn) removeBtn.classList.remove('hidden');
                     saveSettings();
+                    hideProcessing();
                 }).catch(err => {
                     console.error("GIF avatar processing failed:", err);
                     showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+                    hideProcessing();
                 });
             } else {
+                showProcessing();
                 resizeImageForAvatar(file).then(dataUrl => {
+                    hideProcessing();
                     openCropModal(dataUrl, 'settings');
                 });
             }
