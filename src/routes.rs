@@ -64,6 +64,14 @@ pub(crate) async fn new_room(
                     "Invalid room name: use only letters, numbers, hyphens, and underscores (max 64 characters)",
                 ));
             }
+            // Static routes shadow /{room_id}, so these names would redirect
+            // or 404 instead of creating a room.
+            if trimmed == "new" || trimmed == "cluster-ws" {
+                return Err((
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "That room name is reserved. Please choose another.",
+                ));
+            }
             trimmed.to_string()
         }
     } else {
@@ -157,28 +165,96 @@ pub(crate) async fn ws_handler(
         return (axum::http::StatusCode::FORBIDDEN, "Forbidden Origin").into_response();
     }
 
-    let mut client_ip = String::new();
-    if let Some(real_ip) = headers.get("X-Real-IP") {
-        client_ip = real_ip.to_str().unwrap_or("").to_string();
-    } else if let Some(forwarded_for) = headers.get("X-Forwarded-For") {
-        client_ip = forwarded_for
-            .to_str()
-            .unwrap_or("")
-            .split(',')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
-    }
-
     ws.max_frame_size(CLIENT_WS_MAX_MESSAGE_SIZE)
         .max_message_size(CLIENT_WS_MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| handle_socket(socket, room_id, channel_id, state, client_ip))
+        .on_upgrade(move |socket| handle_socket(socket, room_id, channel_id, state))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderMap;
+    use std::collections::{HashSet, VecDeque};
+    use std::sync::Arc;
+
+    fn test_state(password: Option<&str>) -> AppState {
+        AppState {
+            rooms: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            room_cleanup_generations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            room_creation_password: password.map(str::to_string),
+            cluster_tx: tokio::sync::broadcast::channel(CLUSTER_BROADCAST_CAPACITY).0,
+            remote_users: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            remote_user_sources: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            channel_creation_times: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            cluster_key: None,
+            cluster_scheme: "ws".to_string(),
+            allowed_url: None,
+            connected_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            recent_cluster_msg_ids: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            cluster_msg_history: Arc::new(tokio::sync::Mutex::new(VecDeque::new())),
+            node_id: Uuid::new_v4().to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn new_room_rejects_missing_password_when_configured() {
+        let state = test_state(Some("hunter2"));
+        let err = new_room(State(state), HeaderMap::new(), Query(HashMap::new()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn new_room_rejects_wrong_password() {
+        let state = test_state(Some("hunter2"));
+        let params = HashMap::from([("password".to_string(), "wrong".to_string())]);
+        let err = new_room(State(state), HeaderMap::new(), Query(params))
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn new_room_redirects_with_correct_password() {
+        let state = test_state(Some("hunter2"));
+        let params = HashMap::from([("password".to_string(), "hunter2".to_string())]);
+        let res = new_room(State(state), HeaderMap::new(), Query(params)).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn new_room_allows_anyone_without_configured_password() {
+        let state = test_state(None);
+        let res = new_room(State(state), HeaderMap::new(), Query(HashMap::new())).await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn new_room_rejects_disallowed_hosts() {
+        let state = AppState {
+            allowed_url: Some("example.com".to_string()),
+            ..test_state(None)
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "evil.example.net".parse().unwrap());
+        let err = new_room(State(state), headers, Query(HashMap::new()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn new_room_rejects_reserved_names() {
+        let state = test_state(None);
+        for name in ["new", "cluster-ws"] {
+            let params = HashMap::from([("name".to_string(), name.to_string())]);
+            let err = new_room(State(state.clone()), HeaderMap::new(), Query(params))
+                .await
+                .unwrap_err();
+            assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
+        }
+    }
 
     #[test]
     fn websocket_origin_must_match_the_request_host_exactly() {

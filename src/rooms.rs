@@ -18,12 +18,30 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
+
+// The room-creation password gates the *creation* of a room, never joining
+// an existing one: if the room already has members on this node or any
+// cluster node, no password is required.
+fn room_creation_needs_password(
+    required: Option<&str>,
+    exists_locally: bool,
+    exists_remotely: bool,
+    provided: Option<&str>,
+) -> bool {
+    let Some(required) = required else {
+        return false;
+    };
+    if exists_locally || exists_remotely {
+        return false;
+    }
+    provided != Some(required)
+}
+
 pub(crate) async fn handle_socket(
     socket: WebSocket,
     room_id: String,
     channel_id: String,
     state: AppState,
-    _client_ip: String,
 ) {
     let rooms = state.rooms.clone();
     let remote_users = state.remote_users.clone(); // Added remote_users clone
@@ -256,31 +274,22 @@ pub(crate) async fn handle_socket(
                             }
 
                             {
-                                let room_needs_password = if let Some(ref required_pass) =
-                                    state.room_creation_password
-                                {
-                                    let exists_locally = rooms.lock().await.contains_key(&room_id);
-                                    if exists_locally {
-                                        false
-                                    } else {
-                                        let exists_remotely =
-                                            remote_users.lock().await.contains_key(&room_id);
-                                        if exists_remotely {
-                                            false
-                                        } else {
-                                            let pass_match = if let Some(ref data) = parsed.data {
-                                                data.get("password")
-                                                    .and_then(|v| v.as_str())
-                                                    .map(|p| p == required_pass)
-                                                    .unwrap_or(false)
-                                            } else {
-                                                false
-                                            };
-                                            !pass_match
-                                        }
-                                    }
-                                } else {
-                                    false
+                                let room_needs_password = {
+                                    let exists_locally =
+                                        rooms.lock().await.contains_key(&room_id);
+                                    let exists_remotely =
+                                        remote_users.lock().await.contains_key(&room_id);
+                                    let provided_password = parsed
+                                        .data
+                                        .as_ref()
+                                        .and_then(|d| d.get("password"))
+                                        .and_then(|v| v.as_str());
+                                    room_creation_needs_password(
+                                        state.room_creation_password.as_deref(),
+                                        exists_locally,
+                                        exists_remotely,
+                                        provided_password,
+                                    )
                                 };
 
                                 if room_needs_password {
@@ -930,15 +939,34 @@ pub(crate) async fn handle_socket(
                                 if let Some(new_name_str) = new_name {
                                     let mut rooms_lock = rooms.lock().await;
 
-                                    let can_rename = if let Some(room) = rooms_lock.get(&room_id) {
-                                        if let Some(target_channel) = room.get(&target_channel_id) {
-                                            target_channel.is_empty()
-                                                && !room.contains_key(&new_name_str)
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
+                                    // The channel may be hosted on this node, on
+                                    // another node, or both. It can be renamed
+                                    // only when it is empty everywhere we can
+                                    // see it and the target name is free in
+                                    // both views.
+                                    let can_rename = {
+                                        let rl = remote_users.lock().await;
+                                        let remote_room = rl.get(&room_id);
+                                        let room = rooms_lock.get(&room_id);
+                                        let local_channel =
+                                            room.and_then(|r| r.get(&target_channel_id));
+                                        let remote_channel =
+                                            remote_room.and_then(|r| r.get(&target_channel_id));
+                                        let exists_anywhere =
+                                            local_channel.is_some() || remote_channel.is_some();
+                                        let local_ok =
+                                            local_channel.is_none_or(HashMap::is_empty);
+                                        let remote_ok =
+                                            remote_channel.is_none_or(HashMap::is_empty);
+                                        let local_collision = room
+                                            .is_some_and(|r| r.contains_key(&new_name_str));
+                                        let remote_collision = remote_room
+                                            .is_some_and(|r| r.contains_key(&new_name_str));
+                                        exists_anywhere
+                                            && local_ok
+                                            && remote_ok
+                                            && !local_collision
+                                            && !remote_collision
                                     };
 
                                     if can_rename {
@@ -991,7 +1019,15 @@ pub(crate) async fn handle_socket(
                                                 && let Some(channel_data) =
                                                     room.remove(&target_channel_id)
                                             {
-                                                room.insert(new_name_str.clone(), channel_data);
+                                                // Merge, don't replace: the target
+                                                // name may already exist in the
+                                                // remote view, and replacing it
+                                                // would drop those users.
+                                                let target =
+                                                    room.entry(new_name_str.clone()).or_default();
+                                                for (uid, status) in channel_data {
+                                                    target.entry(uid).or_insert(status);
+                                                }
                                             }
                                         }
 
@@ -1036,14 +1072,24 @@ pub(crate) async fn handle_socket(
                             if !target_channel_id.is_empty() && target_channel_id != "General" {
                                 let mut rooms_lock = rooms.lock().await;
 
-                                let can_delete = if let Some(room) = rooms_lock.get(&room_id) {
-                                    if let Some(target_channel) = room.get(&target_channel_id) {
-                                        target_channel.is_empty()
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
+                                // Same semantics as rename: the channel may be
+                                // hosted here, elsewhere, or both, and must be
+                                // empty in every view we can see.
+                                let can_delete = {
+                                    let rl = remote_users.lock().await;
+                                    let remote_room = rl.get(&room_id);
+                                    let room = rooms_lock.get(&room_id);
+                                    let local_channel =
+                                        room.and_then(|r| r.get(&target_channel_id));
+                                    let remote_channel =
+                                        remote_room.and_then(|r| r.get(&target_channel_id));
+                                    let exists_anywhere =
+                                        local_channel.is_some() || remote_channel.is_some();
+                                    let local_ok =
+                                        local_channel.is_none_or(HashMap::is_empty);
+                                    let remote_ok =
+                                        remote_channel.is_none_or(HashMap::is_empty);
+                                    exists_anywhere && local_ok && remote_ok
                                 };
 
                                 if can_delete {
@@ -1051,6 +1097,19 @@ pub(crate) async fn handle_socket(
                                         room.remove(&target_channel_id);
                                     }
                                     drop(rooms_lock);
+
+                                    {
+                                        // This node won't process its own
+                                        // broadcast, so clear the local remote
+                                        // view of the deleted channel too.
+                                        let mut rl = remote_users.lock().await;
+                                        if let Some(room) = rl.get_mut(&room_id) {
+                                            room.remove(&target_channel_id);
+                                            if room.is_empty() {
+                                                rl.remove(&room_id);
+                                            }
+                                        }
+                                    }
 
                                     {
                                         let mut times = state.channel_creation_times.lock().await;
@@ -1424,4 +1483,35 @@ pub(crate) async fn channel_status(
         created_at,
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_configured_password_never_blocks_room_creation() {
+        assert!(!room_creation_needs_password(None, false, false, None));
+        assert!(!room_creation_needs_password(None, false, false, Some("anything")));
+        assert!(!room_creation_needs_password(None, true, false, None));
+    }
+
+    #[test]
+    fn new_room_requires_matching_password() {
+        assert!(room_creation_needs_password(Some("hunter2"), false, false, None));
+        assert!(room_creation_needs_password(Some("hunter2"), false, false, Some("wrong")));
+        assert!(!room_creation_needs_password(Some("hunter2"), false, false, Some("hunter2")));
+    }
+
+    #[test]
+    fn existing_local_room_skips_password_requirement() {
+        assert!(!room_creation_needs_password(Some("hunter2"), true, false, None));
+        assert!(!room_creation_needs_password(Some("hunter2"), true, false, Some("wrong")));
+    }
+
+    #[test]
+    fn existing_remote_room_skips_password_requirement() {
+        assert!(!room_creation_needs_password(Some("hunter2"), false, true, None));
+        assert!(!room_creation_needs_password(Some("hunter2"), true, true, Some("wrong")));
+    }
 }

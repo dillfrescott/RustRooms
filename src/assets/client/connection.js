@@ -149,10 +149,6 @@
                                         if (typeof updateRoomListUI === 'function') updateRoomListUI();
                                     } catch (e) { console.error("Error updating room-list UI:", e); }
                                     break;
-                                case 'room-deleted':
-                                    alert("The room has been deleted.");
-                                    window.location.href = "/";
-                                    break;
                                 case 'existing-users':
                                     try {
                                         if (msg.data && Array.isArray(msg.data.users)) {
@@ -753,7 +749,6 @@
 
             if (newDropIndex !== -1 && newDropIndex !== dragState.currentIndex) {
                 const placeholderArray = [...remoteGrid.querySelectorAll('.video-container')];
-                const currentPlaceholderIndex = placeholderArray.indexOf(dragState.placeholder);
 
                 if (newDropIndex > dragState.currentIndex) {
                     const targetTile = dragState.allTiles[newDropIndex];

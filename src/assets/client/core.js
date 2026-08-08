@@ -57,7 +57,6 @@
             sessionStorage.setItem('rustrooms_tab_session_id', crypto.randomUUID());
         }
         let userAvatarStaticFrame = null;
-        let sidebarOpen = false;
         let globalRoomList = {};
         let isConfigured = false;
         let audioContext;
@@ -1276,9 +1275,6 @@
         async function populateDeviceList() {
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
-                const currentAudio = audioSelect.value;
-                const currentAudioOutput = currentAudioOutputId;
-                const currentVideo = videoSelect.value;
 
                 const audioTrack = localStream ? localStream.getAudioTracks()[0] : null;
                 const videoTrack = localStream ? localStream.getVideoTracks()[0] : null;
@@ -1335,7 +1331,6 @@
                 const videoTrack = localStream ? localStream.getVideoTracks()[0] : null;
 
                 const activeAudioId = audioTrack ? audioTrack.getSettings().deviceId : null;
-                const activeAudioOutputId = currentAudioOutputId;
                 const activeVideoId = videoTrack ? videoTrack.getSettings().deviceId : null;
 
                 settingsAudio.innerHTML = '';
@@ -1397,7 +1392,6 @@
              const currentVideoId = currentVideoTrack ? currentVideoTrack.getSettings().deviceId : "";
 
              const settingsVideoEl = document.getElementById('settingsVideoSource');
-             const originalSettingsVideoValue = settingsVideoEl ? settingsVideoEl.value : null;
              if (videoId && videoId !== currentVideoId && settingsVideoEl) {
                  settingsVideoEl.disabled = true;
              }

@@ -62,6 +62,11 @@ pub(crate) const CLIENT_WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 pub(crate) const CLUSTER_WS_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 32;
 pub(crate) const CLUSTER_BROADCAST_CAPACITY: usize = 64;
+// Cluster links send an app-level keepalive frame every CLUSTER_KEEPALIVE_SECS
+// and treat CLUSTER_PEER_TIMEOUT_SECS of total silence as a dead peer, so
+// hard-crashed nodes don't leave ghost users in remote_users indefinitely.
+pub(crate) const CLUSTER_KEEPALIVE_SECS: u64 = 5;
+pub(crate) const CLUSTER_PEER_TIMEOUT_SECS: u64 = 30;
 pub(crate) const MESSAGE_RATE_WINDOW_SECS: u64 = 10;
 pub(crate) const MAX_MESSAGES_PER_RATE_WINDOW: u32 = 240;
 // Byte budget per rate window: bounds JSON parse work even for huge frames.

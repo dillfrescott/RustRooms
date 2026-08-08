@@ -84,6 +84,20 @@
                     }
                 }
             }, 30000);
+        } else {
+            // Desktop: returning to the tab is the signal to repair a
+            // connection the server closed while it was backgrounded
+            // (e.g. inactivity timeout code 4001 when timers were throttled).
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && !hasLeftRoom) {
+                    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+                        console.log('Returned to tab, WebSocket dead, reconnecting...');
+                        isReconnecting = false;
+                        reconnectionAttempts = 0;
+                        connectWs();
+                    }
+                }
+            });
         }
 
         // Handle iOS BFCache restoration (back-forward cache)
@@ -245,7 +259,6 @@
                 const pc = peers[userId];
                 if (pc) {
                     const iceState = pc.iceConnectionState;
-                    const connState = pc.connectionState;
 
                     if (iceState === 'connected' || iceState === 'completed') {
                         hasConnectedPeers = true;
@@ -790,20 +803,6 @@
             }
         }
 
-        async function createNewRoom() {
-            showNameModal("Start New Room", "Enter room name (optional)", (name) => {
-                if ([...name].length > 64) {
-                    showCustomAlert("Name Too Long", "Room names can be at most 64 characters.");
-                    return;
-                }
-                if (/[\\/]/.test(name)) {
-                    showCustomAlert("Invalid Name", "Room names cannot contain slashes.");
-                    return;
-                }
-                window.location.href = `/${name ? encodeURIComponent(name) : crypto.randomUUID()}`;
-            });
-        }
-
         async function createNewChannel() {
             showNameModal("Create New Channel", "Enter channel name", (name) => {
                 if (!name) return;
@@ -874,11 +873,6 @@
         function switchChannel(newChannelId) {
             if (newChannelId === channelId) return;
             performChannelSwitch(roomId, newChannelId);
-        }
-
-        function switchRoom(newRoomId) {
-            if (newRoomId === roomId) return;
-            performChannelSwitch(newRoomId, 'General');
         }
 
         window.onpopstate = function(event) {
