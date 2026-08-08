@@ -2068,32 +2068,18 @@
             };
 
             if (file.type === 'image/gif') {
-                // Oversized GIFs are auto-resized browser-side (animation
-                // preserved) to fit the server's avatar cap.
+                // GIFs open in the crop modal with the animation looping
+                // inside the crop box, just like stills; the crop is applied
+                // frame-by-frame (animation preserved) and the result is
+                // auto-resized browser-side to fit the server's avatar cap.
                 showProcessing();
-                processGifAvatar(file).then(result => {
-                    userAvatar = result.avatar;
-                    userAvatarIsGif = result.isGif;
-                    userAvatarStaticFrame = result.staticFrame;
-                    userAvatarCache[persistentUserId] = {
-                        avatar: userAvatar,
-                        isGif: userAvatarIsGif,
-                        staticFrame: userAvatarStaticFrame
-                    };
-                    avatarPreview.src = result.staticFrame || result.avatar;
-                    avatarPreview.classList.remove('hidden');
-                    avatarPlaceholder.classList.add('hidden');
-                    if (result.isGif) {
-                        loopGifInElement(avatarPreview, result.avatar);
-                    }
-                    const removeBtn = document.getElementById('btnRemoveSetupAvatar');
-                    if (removeBtn) removeBtn.classList.remove('hidden');
-                    savePreferences();
+                globalThis.readAvatarFile(file).then(dataUrl => {
                     hideProcessing();
+                    openCropModal(dataUrl, 'setup', dataUrl);
                 }).catch(err => {
-                    console.error("GIF avatar processing failed:", err);
-                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+                    console.error("GIF avatar read failed:", err);
                     hideProcessing();
+                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
                 });
             } else {
                 showProcessing();

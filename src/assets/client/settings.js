@@ -117,27 +117,18 @@
             };
 
             if (file.type === 'image/gif') {
-                // Oversized GIFs are auto-resized browser-side (animation
-                // preserved) to fit the server's avatar cap.
+                // GIFs open in the crop modal with the animation looping
+                // inside the crop box, just like stills; the crop is applied
+                // frame-by-frame (animation preserved) and the result is
+                // auto-resized browser-side to fit the server's avatar cap.
                 showProcessing();
-                processGifAvatar(file).then(result => {
-                    newAvatarCandidate = result.avatar;
-                    newAvatarCandidateIsGif = result.isGif;
-                    newAvatarCandidateStaticFrame = result.staticFrame;
-                    settingsAvatarPreview.src = result.staticFrame || result.avatar;
-                    settingsAvatarPreview.classList.remove('hidden');
-                    settingsAvatarPlaceholder.classList.add('hidden');
-                    if (result.isGif) {
-                        loopGifInElement(settingsAvatarPreview, result.avatar);
-                    }
-                    const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
-                    if (removeBtn) removeBtn.classList.remove('hidden');
-                    saveSettings();
+                globalThis.readAvatarFile(file).then(dataUrl => {
                     hideProcessing();
+                    openCropModal(dataUrl, 'settings', dataUrl);
                 }).catch(err => {
-                    console.error("GIF avatar processing failed:", err);
-                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+                    console.error("GIF avatar read failed:", err);
                     hideProcessing();
+                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
                 });
             } else {
                 showProcessing();
@@ -434,9 +425,16 @@
 
         let currentCroppie = null;
         let currentCropTarget = null;
+        let currentCropIsGif = false;
+        let currentCropGifDataUrl = null;
+        let cropGifOverlay = null;
+        let cropGifOverlaySeq = 0;
 
-        function openCropModal(imageUrl, target) {
+        function openCropModal(imageUrl, target, gifDataUrl) {
             currentCropTarget = target;
+            currentCropIsGif = !!gifDataUrl;
+            currentCropGifDataUrl = gifDataUrl || null;
+            stopCropGifOverlay();
             const modal = document.getElementById('cropModal');
             const wrapper = document.getElementById('cropWrapper');
             wrapper.innerHTML = '';
@@ -446,9 +444,21 @@
                 viewport: { width: 200, height: 200, type: 'square' },
                 boundary: { width: '100%', height: 250 },
                 showZoomer: true,
-                enableOrientation: true
+                // GIFs have no EXIF orientation to honor; keep the plain
+                // <img> preview so the looping overlay below can mirror it.
+                enableOrientation: !currentCropIsGif
             });
-            currentCroppie.bind({ url: imageUrl, zoom: 0 });
+            currentCroppie.bind({ url: imageUrl, zoom: 0 }).then(() => {
+                // Guard against a stale bind resolving after the modal was
+                // closed or reopened with a different image.
+                if (currentCropIsGif && currentCropGifDataUrl === gifDataUrl) {
+                    loopGifInCroppie(currentCropGifDataUrl);
+                }
+            }).catch(err => {
+                console.error("Crop preview failed:", err);
+                closeCropModal();
+                showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+            });
         }
 
         function closeCropModal() {
@@ -457,10 +467,153 @@
                 currentCroppie.destroy();
                 currentCroppie = null;
             }
+            stopCropGifOverlay();
+            currentCropIsGif = false;
+            currentCropGifDataUrl = null;
+            currentCropTarget = null;
+        }
+
+        // Overlays a JS-driven GIF loop on the Croppie preview: Croppie only
+        // ever displays the first GIF frame, so a canvas that mirrors the
+        // preview's transform AND transform-origin (pan/zoom) plays the
+        // animation on top. The preview img keeps the original GIF source (so
+        // its layout size, and with it Croppie.get()'s coordinates, stay in
+        // the original image's pixel space) and the opaque overlay covers it.
+        function loopGifInCroppie(gifDataUrl) {
+            stopCropGifOverlay();
+            const wrapper = document.getElementById('cropWrapper');
+            const preview = wrapper.querySelector('.cr-image');
+            if (!preview) return;
+            const seq = ++cropGifOverlaySeq;
+            globalThis.createGifAnimator(gifDataUrl, 800).then(animator => {
+                if (seq !== cropGifOverlaySeq || !preview.isConnected) return;
+                if (!animator) return;
+                const canvas = document.createElement('canvas');
+                canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:-1;';
+                canvas.width = 1;
+                canvas.height = 1;
+                const boundary = preview.parentElement;
+                boundary.appendChild(canvas);
+                const ctx = canvas.getContext('2d');
+                let lastTransform = '';
+                let lastOrigin = '';
+                cropGifOverlay = { canvas, animator, preview };
+                const sync = () => {
+                    if (!canvas.parentNode) return;
+                    const cs = getComputedStyle(preview);
+                    if (cs.transform !== lastTransform) {
+                        lastTransform = cs.transform;
+                        canvas.style.transform = cs.transform;
+                    }
+                    if (cs.transformOrigin !== lastOrigin) {
+                        lastOrigin = cs.transformOrigin;
+                        canvas.style.transformOrigin = cs.transformOrigin;
+                    }
+                    const w = preview.offsetWidth;
+                    const h = preview.offsetHeight;
+                    if (w > 0 && (canvas.style.width !== w + 'px' || canvas.style.height !== h + 'px')) {
+                        canvas.style.width = w + 'px';
+                        canvas.style.height = h + 'px';
+                    }
+                    cropGifOverlay.raf = requestAnimationFrame(sync);
+                };
+                sync();
+                animator.start(frame => {
+                    if (!canvas.parentNode) return;
+                    if (canvas.width !== frame.width || canvas.height !== frame.height) {
+                        canvas.width = frame.width;
+                        canvas.height = frame.height;
+                    }
+                    ctx.drawImage(frame, 0, 0);
+                });
+            });
+        }
+
+        function stopCropGifOverlay() {
+            cropGifOverlaySeq++;
+            if (!cropGifOverlay) return;
+            if (cropGifOverlay.raf) cancelAnimationFrame(cropGifOverlay.raf);
+            if (cropGifOverlay.animator) cropGifOverlay.animator.stop();
+            if (cropGifOverlay.canvas && cropGifOverlay.canvas.parentNode) {
+                cropGifOverlay.canvas.parentNode.removeChild(cropGifOverlay.canvas);
+            }
+            cropGifOverlay = null;
+        }
+
+        function setCropProcessing(active) {
+            const btn = document.querySelector('#cropModal .btn-primary');
+            if (!btn) return;
+            btn.disabled = active;
+            btn.classList.toggle('opacity-60', active);
+            btn.textContent = active ? 'Processing...' : 'Save Avatar';
+        }
+
+        // Applies the cropped result (still or animated GIF) to whichever
+        // target opened the modal and persists it.
+        function commitCropResult(result) {
+            if (currentCropTarget === 'setup') {
+                stopGifPreviewLoop(avatarPreview);
+                userAvatar = result.avatar;
+                userAvatarIsGif = result.isGif;
+                userAvatarStaticFrame = result.staticFrame;
+                userAvatarCache[persistentUserId] = {
+                    avatar: userAvatar,
+                    isGif: userAvatarIsGif,
+                    staticFrame: userAvatarStaticFrame
+                };
+                avatarPreview.src = result.staticFrame || result.avatar;
+                avatarPreview.classList.remove('hidden');
+                avatarPlaceholder.classList.add('hidden');
+                if (result.isGif) {
+                    loopGifInElement(avatarPreview, result.avatar);
+                }
+                const removeBtn = document.getElementById('btnRemoveSetupAvatar');
+                if (removeBtn) removeBtn.classList.remove('hidden');
+                savePreferences();
+            } else if (currentCropTarget === 'settings') {
+                stopGifPreviewLoop(settingsAvatarPreview);
+                newAvatarCandidate = result.avatar;
+                newAvatarCandidateIsGif = result.isGif;
+                newAvatarCandidateStaticFrame = result.staticFrame;
+                settingsAvatarPreview.src = result.staticFrame || result.avatar;
+                settingsAvatarPreview.classList.remove('hidden');
+                settingsAvatarPlaceholder.classList.add('hidden');
+                if (result.isGif) {
+                    loopGifInElement(settingsAvatarPreview, result.avatar);
+                }
+                const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
+                if (removeBtn) removeBtn.classList.remove('hidden');
+                saveSettings();
+            }
+        }
+
+        function applyGifCrop() {
+            if (!currentCroppie) return;
+            const points = currentCroppie.get().points;
+            stopCropGifOverlay();
+            setCropProcessing(true);
+            globalThis.cropGifAvatar(currentCropGifDataUrl, {
+                x: points[0],
+                y: points[1],
+                width: points[2] - points[0],
+                height: points[3] - points[1]
+            }).then(result => {
+                setCropProcessing(false);
+                commitCropResult(result);
+                closeCropModal();
+            }).catch(err => {
+                console.error("GIF crop failed:", err);
+                setCropProcessing(false);
+                showCustomAlert("Image Error", "Could not process this GIF. Please try a different file.");
+            });
         }
 
         function applyCrop() {
             if (!currentCroppie) return;
+            if (currentCropIsGif && currentCropGifDataUrl) {
+                applyGifCrop();
+                return;
+            }
             currentCroppie.result({
                 type: 'base64',
                 size: { width: 400, height: 400 },
@@ -468,32 +621,12 @@
                 quality: 0.8
             }).then(function(base64) {
                 return fitStaticDataUrl(base64).then(function(fitBase64) {
-                if (currentCropTarget === 'setup') {
-                    stopGifPreviewLoop(avatarPreview);
-                    userAvatar = fitBase64;
-                    userAvatarIsGif = false;
-                    userAvatarStaticFrame = null;
-                    avatarPreview.src = userAvatar;
-                    avatarPreview.classList.remove('hidden');
-                    avatarPlaceholder.classList.add('hidden');
-                    const removeBtn = document.getElementById('btnRemoveSetupAvatar');
-                    if (removeBtn) removeBtn.classList.remove('hidden');
-                    savePreferences();
-                } else if (currentCropTarget === 'settings') {
-                    stopGifPreviewLoop(settingsAvatarPreview);
-                    newAvatarCandidate = fitBase64;
-                    newAvatarCandidateIsGif = false;
-                    newAvatarCandidateStaticFrame = null;
-                    settingsAvatarPreview.src = newAvatarCandidate;
-                    settingsAvatarPreview.classList.remove('hidden');
-                    settingsAvatarPlaceholder.classList.add('hidden');
-                    const removeBtn = document.getElementById('btnRemoveSettingsAvatar');
-                    if (removeBtn) removeBtn.classList.remove('hidden');
+                    commitCropResult({
+                        avatar: fitBase64,
+                        isGif: false,
+                        staticFrame: null
+                    });
                     closeCropModal();
-                    saveSettings();
-                    return;
-                }
-                closeCropModal();
                 });
             });
         }

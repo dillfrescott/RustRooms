@@ -11,6 +11,10 @@
     // keep a margin for the data:image/gif;base64, prefix and JSON envelope.
     const MAX_AVATAR_DATA_URL_LEN = 2 * 1024 * 1024 - 100 * 1024;
     const GIF_MAX_CAPTURE_DIM = 400;
+    // Capture dim for cropped avatars: cropping happens in capture space, so
+    // a higher dim keeps zoomed-in crops from getting blurry. Bounded so a
+    // pathological GIF can't blow up memory (2.5 MB per frame at 800px).
+    const GIF_CROP_CAPTURE_DIM = 800;
     const GIF_MAX_FRAMES = 150;
     const GIF_QUIET_MS = 2000;
     // If the very first frame holds for GIF_QUIET_MS the capture would
@@ -29,6 +33,15 @@
             reader.onload = () => resolve(reader.result);
             reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
             reader.readAsDataURL(file);
+        });
+    }
+
+    function loadImageDims(dataUrl) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+            img.onerror = () => reject(new Error('Failed to decode image'));
+            img.src = dataUrl;
         });
     }
 
@@ -415,13 +428,93 @@
         return { avatar: jpeg, isGif: false };
     }
 
+    function cropGifFrames(frames, srcW, srcH, cx, cy, cw, ch) {
+        const src = document.createElement('canvas');
+        src.width = srcW;
+        src.height = srcH;
+        const sctx = src.getContext('2d');
+        const dst = document.createElement('canvas');
+        dst.width = cw;
+        dst.height = ch;
+        const dctx = dst.getContext('2d');
+        const out = [];
+        for (const frame of frames) {
+            sctx.clearRect(0, 0, srcW, srcH);
+            sctx.putImageData(new ImageData(frame.data, srcW, srcH), 0, 0);
+            dctx.clearRect(0, 0, cw, ch);
+            dctx.drawImage(src, cx, cy, cw, ch, 0, 0, cw, ch);
+            out.push({
+                data: new Uint8ClampedArray(dctx.getImageData(0, 0, cw, ch).data),
+                delay: frame.delay,
+            });
+            yieldToEventLoop();
+        }
+        return out;
+    }
+
+    // Crops every frame of an animated GIF to the given rectangle and
+    // re-encodes it, preserving the animation. cropRect is in the original
+    // image's pixel space ({ x, y, width, height }, as returned by
+    // Croppie.get()). Downscales to fit the server cap if needed.
+    async function cropGifDataUrl(dataUrl, cropRect) {
+        const natural = await loadImageDims(dataUrl);
+        const captured = await captureGifFrames(dataUrl, GIF_CROP_CAPTURE_DIM);
+        const scale = captured.width / natural.width;
+        let cx = Math.round(cropRect.x * scale);
+        let cy = Math.round(cropRect.y * scale);
+        let cw = Math.max(1, Math.round(cropRect.width * scale));
+        let ch = Math.max(1, Math.round(cropRect.height * scale));
+        cx = Math.max(0, Math.min(cx, captured.width - 1));
+        cy = Math.max(0, Math.min(cy, captured.height - 1));
+        cw = Math.max(1, Math.min(cw, captured.width - cx));
+        ch = Math.max(1, Math.min(ch, captured.height - cy));
+        const cropped = cropGifFrames(captured.frames, captured.width, captured.height, cx, cy, cw, ch);
+        const rawBudget = Math.floor((MAX_AVATAR_DATA_URL_LEN * 3) / 4);
+        const maxSide = Math.max(cw, ch);
+        const sizes = [{ w: cw, h: ch }];
+        for (const dim of [400, 320, 256, 200, 160, 128]) {
+            if (dim < maxSide) {
+                const s = dim / maxSide;
+                sizes.push({ w: Math.max(1, Math.round(cw * s)), h: Math.max(1, Math.round(ch * s)) });
+            }
+        }
+        let last = null;
+        for (const size of sizes) {
+            if (last && last.w === size.w && last.h === size.h) continue;
+            last = size;
+            if (cropped.length * size.w * size.h * 0.8 > rawBudget) continue;
+            const frames = (size.w === cw && size.h === ch)
+                ? cropped
+                : await downscaleGifFrames(cropped, cw, ch, size.w, size.h);
+            const avatar = await encodeGifFrames(frames, size.w, size.h, captured.hasAlpha);
+            if (avatar.length <= MAX_AVATAR_DATA_URL_LEN) {
+                const staticFrame = await extractGifFirstFrame(avatar);
+                return { avatar, staticFrame, isGif: true };
+            }
+        }
+        // Practically unreachable fallback: first frame as a small JPEG.
+        const canvas = document.createElement('canvas');
+        canvas.width = cw;
+        canvas.height = ch;
+        const ctx = canvas.getContext('2d');
+        ctx.putImageData(new ImageData(cropped[0].data, cw, ch), 0, 0);
+        let jpeg = canvas.toDataURL('image/jpeg', 0.7);
+        if (jpeg.length > MAX_AVATAR_DATA_URL_LEN) {
+            jpeg = canvas.toDataURL('image/jpeg', 0.3);
+        }
+        const staticFrame = await extractGifFirstFrame(jpeg);
+        return { avatar: jpeg, staticFrame, isGif: false };
+    }
+
     // JS-driven GIF player for the speaking animation. Some browsers
     // (enterprise AnimationPolicy, extensions) never advance GIF frames in
     // <img> elements; stepping pre-decoded frames with a timer still works
     // there. Returns null when ImageDecoder is unavailable (browsers that
     // animate GIFs natively keep using the plain <img> src swap).
-    async function createGifAnimator(dataUrl) {
-        const decoded = await decodeGifFrames(dataUrl, GIF_MAX_CAPTURE_DIM);
+    // maxDim caps the frame capture size (larger = sharper previews when the
+    // GIF is displayed larger than GIF_MAX_CAPTURE_DIM).
+    async function createGifAnimator(dataUrl, maxDim) {
+        const decoded = await decodeGifFrames(dataUrl, maxDim || GIF_MAX_CAPTURE_DIM);
         if (!decoded || decoded.frames.length < 2) {
             return null;
         }
@@ -488,6 +581,8 @@
     globalThis.processGifAvatar = processGifAvatar;
     globalThis.fitStaticDataUrl = fitStaticDataUrl;
     globalThis.createGifAnimator = createGifAnimator;
+    globalThis.readAvatarFile = readFileAsDataUrl;
+    globalThis.cropGifAvatar = cropGifDataUrl;
     // Test hooks (used by the diagnostic page).
     globalThis.__captureGifFramesWithDecoder = captureGifFramesWithDecoder;
     // Test hooks (used by the node-based verification script).
