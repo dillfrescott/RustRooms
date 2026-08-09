@@ -19,6 +19,14 @@ pub(crate) struct UserStatus {
     pub is_low_bandwidth_mode: bool,
     #[serde(default)]
     pub is_on_the_go_mode: bool,
+    // Monotonic revision counter for the persisted profile (nickname, avatar,
+    // modes). The client bumps it on every local save and sends it with join
+    // and update-user; the server keeps the highest revision it has accepted
+    // and echoes its own copy back, so a client whose local storage was lost
+    // (e.g. iOS killing a frozen tab) can never silently clobber or drift
+    // away from the server's authoritative profile.
+    #[serde(default)]
+    pub profile_rev: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +164,34 @@ pub(crate) fn current_unix_secs() -> u64 {
         .as_secs()
 }
 
+// Resolves the canonical status for a joining identity. If the server already
+// holds a profile for it (a reconnect before the old socket's death is
+// noticed), the stored copy wins unless the client provably saved something
+// newer (profileRev). Otherwise a client that lost its local storage (frozen
+// tab killed by iOS) would rejoin as "Guest" and clobber the profile everyone
+// else still sees. Per-connection state (screen sharing) always comes from the
+// new connection's payload.
+pub(crate) fn reconcile_join_status(
+    existing: Option<&UserStatus>,
+    client_status: UserStatus,
+) -> UserStatus {
+    match existing {
+        Some(prev) if prev.profile_rev >= client_status.profile_rev => UserStatus {
+            nickname: prev.nickname.clone(),
+            avatar: prev.avatar.clone(),
+            is_gif: prev.is_gif,
+            static_frame: prev.static_frame.clone(),
+            is_muted: prev.is_muted,
+            is_deafened: prev.is_deafened,
+            is_screen_sharing: client_status.is_screen_sharing,
+            is_low_bandwidth_mode: prev.is_low_bandwidth_mode,
+            is_on_the_go_mode: prev.is_on_the_go_mode,
+            profile_rev: prev.profile_rev,
+        },
+        _ => client_status,
+    }
+}
+
 pub(crate) fn normalize_configured_host(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -224,5 +260,71 @@ mod tests {
             normalize_configured_host("[::1]:3000").as_deref(),
             Some("[::1]")
         );
+    }
+
+    fn test_status(nickname: &str, rev: u64) -> UserStatus {
+        UserStatus {
+            nickname: nickname.to_string(),
+            avatar: None,
+            is_gif: false,
+            static_frame: None,
+            is_muted: false,
+            is_deafened: false,
+            is_screen_sharing: false,
+            is_low_bandwidth_mode: false,
+            is_on_the_go_mode: false,
+            profile_rev: rev,
+        }
+    }
+
+    #[test]
+    fn fresh_join_uses_client_profile() {
+        let client = test_status("Lisa", 5);
+        assert_eq!(reconcile_join_status(None, client.clone()), client);
+    }
+
+    #[test]
+    fn stale_client_rejoin_keeps_server_profile() {
+        // Local storage was lost (frozen tab killed by iOS): the client
+        // rejoins as Guest with rev 0, but the server still holds "Lisa"
+        // with a higher revision. The server copy must win.
+        let server = test_status("Lisa", 5);
+        let stale_client = test_status("Guest", 0);
+        let resolved = reconcile_join_status(Some(&server), stale_client);
+        assert_eq!(resolved.nickname, "Lisa");
+        assert_eq!(resolved.profile_rev, 5);
+    }
+
+    #[test]
+    fn equal_revision_keeps_server_profile() {
+        let server = test_status("Lisa", 5);
+        let client = test_status("Lisa", 5);
+        let resolved = reconcile_join_status(Some(&server), client);
+        assert_eq!(resolved.nickname, "Lisa");
+        assert_eq!(resolved.profile_rev, 5);
+    }
+
+    #[test]
+    fn newer_client_profile_wins_on_rejoin() {
+        // The user edited the name in the setup overlay and reconnects
+        // before the old socket's death is noticed: the bump shows this is
+        // a deliberate new save, so it must win.
+        let server = test_status("Lisa", 5);
+        let client = test_status("Mom", 6);
+        let resolved = reconcile_join_status(Some(&server), client);
+        assert_eq!(resolved.nickname, "Mom");
+        assert_eq!(resolved.profile_rev, 6);
+    }
+
+    #[test]
+    fn stale_reconnect_adopts_join_screen_state() {
+        let mut server = test_status("Lisa", 5);
+        server.is_screen_sharing = true;
+        let mut client = test_status("Guest", 0);
+        client.is_screen_sharing = false;
+        let resolved = reconcile_join_status(Some(&server), client);
+        assert_eq!(resolved.nickname, "Lisa");
+        // Per-connection state always reflects the new connection.
+        assert!(!resolved.is_screen_sharing);
     }
 }

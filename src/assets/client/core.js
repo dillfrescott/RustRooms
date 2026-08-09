@@ -51,6 +51,11 @@
         let peerScreenAudioTrackId = {};
         let pendingCandidates = {};
         let userNickname = "Guest";
+        // Monotonic revision of the locally persisted profile. Bumped on every
+        // savePreferences and sent with join/update-user so the server can tell
+        // a genuinely newer local profile from a stale one (e.g. after iOS
+        // killed a frozen tab and the localStorage write was lost).
+        let profileRev = 0;
         let userAvatar = null;
         let userAvatarIsGif = false;
         if (!sessionStorage.getItem('rustrooms_tab_session_id')) {
@@ -274,7 +279,7 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'update-user',
-                    data: { isLowBandwidthMode: checked }
+                    data: { isLowBandwidthMode: checked, profileRev: profileRev }
                 }));
             }
         }
@@ -389,7 +394,7 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'update-user',
-                    data: { isOnTheGoMode: enable }
+                    data: { isOnTheGoMode: enable, profileRev: profileRev }
                 }));
             }
         }
@@ -1737,6 +1742,9 @@
             if (stored) {
                 try {
                     const data = JSON.parse(stored);
+                    if (typeof data.profileRev === 'number') {
+                        profileRev = data.profileRev;
+                    }
                     if (data.nickname) {
                         userNickname = data.nickname;
                         if (nicknameInput) nicknameInput.value = userNickname;
@@ -1836,6 +1844,7 @@
         }
 
         function savePreferences() {
+            profileRev++;
             let audioInputId = currentAudioInputId;
             let videoInputId = currentVideoInputId;
             let audioOutputId = currentAudioOutputId;
@@ -1881,6 +1890,7 @@
             try {
                 localStorage.setItem('rustrooms_profile', JSON.stringify({
                     nickname: userNickname,
+                    profileRev: profileRev,
                     audioOutputId: audioOutputId,
                     audioInputId: audioInputId,
                     videoInputId: videoInputId,
@@ -1899,6 +1909,63 @@
             currentAudioInputId = audioInputId;
             currentVideoInputId = videoInputId;
             currentAudioOutputId = audioOutputId;
+        }
+
+        // The server is the authority for the profile it stores (name, avatar,
+        // modes, mute state). Whenever it echoes a user-update or sends the
+        // existing-users list, this adopts that canonical state into the local
+        // variables, the inputs, and localStorage, so a client whose local
+        // storage was lost (frozen tab killed) heals instead of drifting.
+        function adoptServerProfile(status) {
+            if (!status) return;
+            if (typeof status.profileRev === 'number') {
+                profileRev = status.profileRev;
+            }
+            if (typeof status.nickname === 'string' && status.nickname) {
+                userNickname = status.nickname;
+                const activeEl = document.activeElement;
+                if (nicknameInput && activeEl !== nicknameInput) nicknameInput.value = userNickname;
+                const sNick = document.getElementById('settingsNicknameInput');
+                if (sNick && activeEl !== sNick) sNick.value = userNickname;
+            }
+            if (status.avatar !== undefined) {
+                userAvatar = status.avatar || null;
+                userAvatarIsGif = !!status.isGif;
+                userAvatarStaticFrame = status.staticFrame || null;
+                if (userAvatar) {
+                    userAvatarCache[persistentUserId] = {
+                        avatar: userAvatar,
+                        isGif: userAvatarIsGif,
+                        staticFrame: userAvatarStaticFrame
+                    };
+                } else {
+                    delete userAvatarCache[persistentUserId];
+                }
+                if (typeof updateLocalAvatar === 'function') updateLocalAvatar();
+            }
+            if (status.isMuted !== undefined) {
+                pendingMicToggle = !!status.isMuted;
+            }
+            if (status.isDeafened !== undefined) {
+                isDeafened = !!status.isDeafened;
+            }
+            if (status.isLowBandwidthMode !== undefined) {
+                isLowBandwidthMode = !!status.isLowBandwidthMode;
+                const setupLBM = document.getElementById('setupLowBandwidth');
+                const settingsLBM = document.getElementById('settingsLowBandwidth');
+                if (setupLBM) setupLBM.checked = isLowBandwidthMode;
+                if (settingsLBM) settingsLBM.checked = isLowBandwidthMode;
+                if (typeof updateLowBandwidthBadgeVisibility === 'function') updateLowBandwidthBadgeVisibility();
+            }
+            if (status.isOnTheGoMode !== undefined) {
+                isOnTheGoMode = !!status.isOnTheGoMode;
+                const setupOtg = document.getElementById('setupOnTheGo');
+                const settingsOtg = document.getElementById('settingsOnTheGo');
+                if (setupOtg) setupOtg.checked = isOnTheGoMode;
+                if (settingsOtg) settingsOtg.checked = isOnTheGoMode;
+            }
+            if (typeof updateLocalLabel === 'function') updateLocalLabel();
+            savePreferences();
         }
 
         async function testSpeaker(selectId) {

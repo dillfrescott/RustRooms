@@ -82,6 +82,7 @@
                                 data: {
                                     userId: persistentUserId,
                                     nickname: userNickname,
+                                    profileRev: profileRev,
                                     avatar: userAvatar,
                                     isGif: userAvatarIsGif,
                                     staticFrame: userAvatarStaticFrame,
@@ -153,6 +154,13 @@
                                     try {
                                         if (msg.data && Array.isArray(msg.data.users)) {
                                             msg.data.users.forEach(user => {
+                                                if (user.id === persistentUserId) {
+                                                    // The server's canonical copy of our own
+                                                    // profile: adopt it so a client that lost
+                                                    // its local storage (frozen tab killed by
+                                                    // iOS) heals instead of reverting to Guest.
+                                                    adoptServerProfile(user.status);
+                                                }
                                                 userAvatarCache[user.id] = {
                                                     avatar: user.status.avatar,
                                                     isGif: user.status.isGif,
@@ -284,6 +292,13 @@
                                     }
                                     break;
                                 case 'user-update':
+                                     if (msg.userId === persistentUserId) {
+                                         // Authoritative echo of our own update: adopt it
+                                         // so local state can never diverge from what the
+                                         // server (and everyone else) sees.
+                                         if (msg.data) adoptServerProfile(msg.data);
+                                         break;
+                                     }
                                      updatePeerTrackHints(msg.userId, msg.data);
                                      if (msg.data) {
                                          userAvatarCache[msg.userId] = {
@@ -1925,18 +1940,20 @@
                     }
                 }
 
+                savePreferences();
+
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'update-user',
                         data: {
                             isMuted: !track.enabled,
                             isDeafened: isDeafened,
+                            profileRev: profileRev,
                             micTrackId: track ? track.id : null,
                             screenAudioTrackId: screenStream ? (screenStream.getAudioTracks()[0]?.id || null) : null
                         }
                     }));
                 }
-                savePreferences();
             }
         }
 
@@ -2053,18 +2070,20 @@
 
             updateLocalLabel();
 
+            savePreferences();
+
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'update-user',
                     data: {
                         isMuted: isDeafened || !micAudioTrack || !micAudioTrack.enabled,
                         isDeafened: isDeafened,
+                        profileRev: profileRev,
                         micTrackId: micAudioTrack ? micAudioTrack.id : null,
                         screenAudioTrackId: screenAudioTrack ? screenAudioTrack.id : null
                     }
                 }));
             }
-            savePreferences();
             updateOnTheGoButtons();
         }
 

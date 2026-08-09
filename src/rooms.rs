@@ -268,11 +268,23 @@ pub(crate) async fn handle_socket(
                                 .filter(|s| s.len() <= MAX_STATIC_FRAME_DATA_LEN)
                                 .map(|s| s.to_string());
 
+                            let profile_rev = parsed
+                                .data
+                                .as_ref()
+                                .and_then(|d| d.get("profileRev"))
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+
                             if avatar.is_none() {
                                 is_gif = false;
                                 static_frame = None;
                             }
 
+                            // Canonical status stored for this identity (either
+                            // the client's fresh profile or the server's kept
+                            // copy on a stale reconnect); announced to peers
+                            // and echoed back to the client via existing-users.
+                            let joined_status;
                             {
                                 let room_needs_password = {
                                     let exists_locally =
@@ -343,23 +355,34 @@ pub(crate) async fn handle_socket(
                                         .or_insert_with(current_unix_secs);
                                 }
 
-                                channel.insert(
-                                    user_id.clone(),
-                                    (
-                                        tx.clone(),
-                                        UserStatus {
-                                            nickname: nickname.clone(),
-                                            avatar: avatar.clone(),
-                                            is_gif,
-                                            static_frame: static_frame.clone(),
-                                            is_muted,
-                                            is_deafened,
-                                            is_screen_sharing,
-                                            is_low_bandwidth_mode,
-                                            is_on_the_go_mode,
-                                        },
-                                    ),
+                                // If this identity already has a stored status in
+                                // the channel (a reconnect: the old socket's
+                                // death hasn't been noticed yet), the server's
+                                // copy wins unless the client provably saved
+                                // something newer (profileRev). Otherwise a
+                                // client that lost its local storage (frozen tab
+                                // killed by iOS) would rejoin as "Guest" and
+                                // clobber the name everyone else still sees.
+                                // The client reconciles by adopting the status
+                                // echoed back in existing-users.
+                                let client_status = UserStatus {
+                                    nickname: nickname.clone(),
+                                    avatar: avatar.clone(),
+                                    is_gif,
+                                    static_frame: static_frame.clone(),
+                                    is_muted,
+                                    is_deafened,
+                                    is_screen_sharing,
+                                    is_low_bandwidth_mode,
+                                    is_on_the_go_mode,
+                                    profile_rev,
+                                };
+                                joined_status = reconcile_join_status(
+                                    channel.get(&user_id).map(|(_, status)| status),
+                                    client_status,
                                 );
+
+                                channel.insert(user_id.clone(), (tx.clone(), joined_status.clone()));
                             }
 
                             if room_cleanup_generations
@@ -407,7 +430,8 @@ pub(crate) async fn handle_socket(
                                                             "isDeafened": status.is_deafened,
                                                             "isScreenSharing": status.is_screen_sharing,
                                                             "isLowBandwidthMode": status.is_low_bandwidth_mode,
-                                                            "isOnTheGoMode": status.is_on_the_go_mode
+                                                            "isOnTheGoMode": status.is_on_the_go_mode,
+                                                            "profileRev": status.profile_rev
                                                         }
                                                     }));
                                             }
@@ -432,7 +456,8 @@ pub(crate) async fn handle_socket(
                                                             "isDeafened": status.is_deafened,
                                                             "isScreenSharing": status.is_screen_sharing,
                                                             "isLowBandwidthMode": status.is_low_bandwidth_mode,
-                                                            "isOnTheGoMode": status.is_on_the_go_mode
+                                                            "isOnTheGoMode": status.is_on_the_go_mode,
+                                                            "profileRev": status.profile_rev
                                                         }
                                                     }));
                                             }
@@ -451,20 +476,22 @@ pub(crate) async fn handle_socket(
 
                             // Only forward the validated public profile fields. In particular, the
                             // room-creation password must never be relayed to peers or cluster nodes.
+                            // Uses the canonical stored status so a stale reconnect
+                            // announces the server's copy, not the client's.
                             let notify_data = Some(serde_json::json!({
-                                "nickname": nickname,
-                                "avatar": avatar,
-                                "isGif": is_gif,
-                                "staticFrame": static_frame,
-                                "isMuted": is_muted,
-                                "isDeafened": is_deafened,
+                                "nickname": joined_status.nickname,
+                                "avatar": joined_status.avatar,
+                                "isGif": joined_status.is_gif,
+                                "staticFrame": joined_status.static_frame,
+                                "isMuted": joined_status.is_muted,
+                                "isDeafened": joined_status.is_deafened,
                                 "camEnabled": cam_enabled,
-                                "screenEnabled": is_screen_sharing,
+                                "screenEnabled": joined_status.is_screen_sharing,
                                 "screenAudio": screen_has_audio,
                                 "micTrackId": mic_track_id,
                                 "screenAudioTrackId": screen_audio_track_id,
-                                "isLowBandwidthMode": is_low_bandwidth_mode,
-                                "isOnTheGoMode": is_on_the_go_mode
+                                "isLowBandwidthMode": joined_status.is_low_bandwidth_mode,
+                                "isOnTheGoMode": joined_status.is_on_the_go_mode
                             }));
 
                             let notify_msg = serde_json::to_string(&SignalMessage {
@@ -510,17 +537,7 @@ pub(crate) async fn handle_socket(
                                         channel_id: channel_id.clone(),
                                         user_id: user_id.clone(),
                                         msg_id: Uuid::new_v4().to_string(),
-                                        status: Some(UserStatus {
-                                            nickname: nickname.clone(),
-                                            avatar: avatar.clone(),
-                                            is_muted,
-                                            is_deafened,
-                                            is_screen_sharing,
-                                            is_gif,
-                                            static_frame: static_frame.clone(),
-                                            is_low_bandwidth_mode,
-                                            is_on_the_go_mode,
-                                        }),
+                                        status: Some(joined_status.clone()),
                                         data: notify_data.clone(),
                                         signal_msg: None,
                                     },
@@ -561,71 +578,87 @@ pub(crate) async fn handle_socket(
                                 {
                                     if let Some((_, status)) = channel.get_mut(&user_id) {
                                         let previous = status.clone();
-                                        if let Some(d) = data {
-                                            if let Some(n) =
-                                                d.get("nickname").and_then(|v| v.as_str())
-                                            {
-                                                status.nickname =
-                                                    n.chars().take(MAX_NICKNAME_LEN).collect();
-                                            }
-                                            if let Some(a) = d.get("avatar") {
-                                                if a.is_null() {
-                                                    status.avatar = None;
+                                        // Drop updates from a stale client copy
+                                        // (e.g. one that lost its local storage):
+                                        // the join-time echo has already
+                                        // reconciled it, and letting an older
+                                        // revision overwrite the stored profile
+                                        // would re-introduce the desync.
+                                        let data_rev = data
+                                            .and_then(|d| d.get("profileRev"))
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
+                                        if data_rev >= status.profile_rev {
+                                            if let Some(d) = data {
+                                                if let Some(n) =
+                                                    d.get("nickname").and_then(|v| v.as_str())
+                                                {
+                                                    status.nickname = n
+                                                        .chars()
+                                                        .take(MAX_NICKNAME_LEN)
+                                                        .collect();
+                                                }
+                                                if let Some(a) = d.get("avatar") {
+                                                    if a.is_null() {
+                                                        status.avatar = None;
+                                                        status.is_gif = false;
+                                                        status.static_frame = None;
+                                                    } else if let Some(a_str) = a.as_str()
+                                                        && a_str.len() <= MAX_AVATAR_DATA_LEN
+                                                    {
+                                                        status.avatar = Some(a_str.to_string());
+                                                    }
+                                                }
+                                                if let Some(g) =
+                                                    d.get("isGif").and_then(|v| v.as_bool())
+                                                {
+                                                    status.is_gif = g;
+                                                }
+                                                if d.contains_key("staticFrame") {
+                                                    let sf = d
+                                                        .get("staticFrame")
+                                                        .and_then(|v| v.as_str())
+                                                        .filter(|s| {
+                                                            s.len() <= MAX_STATIC_FRAME_DATA_LEN
+                                                        })
+                                                        .map(|s| s.to_string());
+                                                    if sf.is_some() {
+                                                        status.static_frame = sf;
+                                                    } else if d
+                                                        .get("staticFrame")
+                                                        .is_some_and(|v| v.is_null())
+                                                    {
+                                                        status.static_frame = None;
+                                                    }
+                                                }
+                                                if let Some(m) =
+                                                    d.get("isMuted").and_then(|v| v.as_bool())
+                                                {
+                                                    status.is_muted = m;
+                                                }
+                                                if let Some(d) =
+                                                    d.get("isDeafened").and_then(|v| v.as_bool())
+                                                {
+                                                    status.is_deafened = d;
+                                                }
+                                                if let Some(lbm) = d
+                                                    .get("isLowBandwidthMode")
+                                                    .and_then(|v| v.as_bool())
+                                                {
+                                                    status.is_low_bandwidth_mode = lbm;
+                                                }
+                                                if let Some(otg) =
+                                                    d.get("isOnTheGoMode").and_then(|v| v.as_bool())
+                                                {
+                                                    status.is_on_the_go_mode = otg;
+                                                }
+                                                if status.avatar.is_none() {
                                                     status.is_gif = false;
                                                     status.static_frame = None;
-                                                } else if let Some(a_str) = a.as_str()
-                                                    && a_str.len() <= MAX_AVATAR_DATA_LEN
-                                                {
-                                                    status.avatar = Some(a_str.to_string());
                                                 }
                                             }
-                                            if let Some(g) =
-                                                d.get("isGif").and_then(|v| v.as_bool())
-                                            {
-                                                status.is_gif = g;
-                                            }
-                                            if d.contains_key("staticFrame") {
-                                                let sf = d
-                                                    .get("staticFrame")
-                                                    .and_then(|v| v.as_str())
-                                                    .filter(|s| {
-                                                        s.len() <= MAX_STATIC_FRAME_DATA_LEN
-                                                    })
-                                                    .map(|s| s.to_string());
-                                                if sf.is_some() {
-                                                    status.static_frame = sf;
-                                                } else if d
-                                                    .get("staticFrame")
-                                                    .is_some_and(|v| v.is_null())
-                                                {
-                                                    status.static_frame = None;
-                                                }
-                                            }
-                                            if let Some(m) =
-                                                d.get("isMuted").and_then(|v| v.as_bool())
-                                            {
-                                                status.is_muted = m;
-                                            }
-                                            if let Some(d) =
-                                                d.get("isDeafened").and_then(|v| v.as_bool())
-                                            {
-                                                status.is_deafened = d;
-                                            }
-                                            if let Some(lbm) = d
-                                                .get("isLowBandwidthMode")
-                                                .and_then(|v| v.as_bool())
-                                            {
-                                                status.is_low_bandwidth_mode = lbm;
-                                            }
-                                            if let Some(otg) =
-                                                d.get("isOnTheGoMode").and_then(|v| v.as_bool())
-                                            {
-                                                status.is_on_the_go_mode = otg;
-                                            }
-                                            if status.avatar.is_none() {
-                                                status.is_gif = false;
-                                                status.static_frame = None;
-                                            }
+                                            status.profile_rev =
+                                                data_rev.max(status.profile_rev);
                                         }
                                         // Only propagate when something actually changed,
                                         // so spammy same-value updates don't trigger a
@@ -646,12 +679,14 @@ pub(crate) async fn handle_socket(
                                         })
                                         .unwrap();
 
-                                        for (uid, (tx, _)) in channel.iter() {
-                                            if *uid != user_id {
-                                                let _ = tx.try_send(Ok(Message::Text(
-                                                    notify_msg.clone().into(),
-                                                )));
-                                            }
+                                        // Broadcast to everyone INCLUDING the sender:
+                                        // the authoritative echo lets the client
+                                        // reconcile its local profile (and heal it
+                                        // if local storage was lost).
+                                        for (_, (tx, _)) in channel.iter() {
+                                            let _ = tx.try_send(Ok(Message::Text(
+                                                notify_msg.clone().into(),
+                                            )));
                                         }
                                     }
 

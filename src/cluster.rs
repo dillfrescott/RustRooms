@@ -1231,6 +1231,7 @@ fn presence_status(status: &UserStatus) -> UserStatus {
         is_screen_sharing: status.is_screen_sharing,
         is_low_bandwidth_mode: status.is_low_bandwidth_mode,
         is_on_the_go_mode: status.is_on_the_go_mode,
+        profile_rev: status.profile_rev,
     }
 }
 
@@ -1340,6 +1341,7 @@ mod tests {
             is_screen_sharing: false,
             is_low_bandwidth_mode: false,
             is_on_the_go_mode: false,
+            profile_rev: 0,
         }
     }
 

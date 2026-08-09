@@ -20,7 +20,7 @@
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: "update-user",
-                        data: { nickname: userNickname }
+                        data: { nickname: userNickname, profileRev: profileRev }
                     }));
                 }
             }, 500);
@@ -158,6 +158,7 @@
                     type: "update-user",
                     data: {
                         nickname: userNickname,
+                        profileRev: profileRev,
                         avatar: userAvatar,
                         isGif: userAvatarIsGif,
                         staticFrame: userAvatarStaticFrame
