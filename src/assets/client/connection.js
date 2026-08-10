@@ -623,7 +623,10 @@
             const wrapper = document.getElementById(`wrapper-${userId}`);
             if (wrapper) {
                 const nameSpan = wrapper.querySelector('.peer-name');
-                if (nameSpan && nickname) nameSpan.innerText = nickname;
+                // Update even for falsy nicknames: the server normalizes
+                // empty names to "Guest", and skipping them would leave the
+                // stale name visible here while the owner shows "Guest".
+                if (nameSpan) nameSpan.innerText = nickname || 'Guest';
 
                 const statusContainer = wrapper.querySelector('.peer-status-icons');
                 if (statusContainer) {
@@ -1164,7 +1167,9 @@
         function initPeer(userId, initiator, nickname, avatarUrl, isMuted, remoteIsDeafened, isGif, staticFrame) {
             if (peers[userId]) return;
 
-            const displayName = nickname || `User ${userId.substr(0,4)}`;
+            // Same fallback the owner's own UI uses: an unset nickname is
+            // "Guest" for everyone, never a name only one side shows.
+            const displayName = nickname || 'Guest';
 
             const pc = new RTCPeerConnection(rtcConfig);
             peers[userId] = pc;

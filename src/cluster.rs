@@ -845,6 +845,10 @@ async fn handle_cluster_message(
     match msg.msg_type.as_str() {
         "user-joined" => {
             if let Some(ref status) = msg.status {
+                // Normalize at the ingest boundary so a remote instance can
+                // never store a nickname the owner's own client doesn't show.
+                let mut status = status.clone();
+                status.nickname = normalize_nickname(&status.nickname);
                 state
                     .room_cleanup_generations
                     .lock()
@@ -977,6 +981,8 @@ async fn handle_cluster_message(
         }
         "user-update" => {
             if let Some(ref status) = msg.status {
+                let mut status = status.clone();
+                status.nickname = normalize_nickname(&status.nickname);
                 {
                     let mut rl = remote_users.lock().await;
                     if let Some(room) = rl.get_mut(&msg.room_id)

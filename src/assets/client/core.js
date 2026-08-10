@@ -1843,8 +1843,13 @@
             } catch (e) { console.error("DB Avatar error", e); }
         }
 
-        function savePreferences() {
-            profileRev++;
+        // bumpRev is only true for genuine local saves. Adopting a server
+        // echo must persist the server's revision verbatim — bumping it again
+        // would make the revision a noisy heartbeat instead of a true "my
+        // last save" version, which is what the server's stale-update guard
+        // (profileRev) compares against.
+        function savePreferences(bumpRev = true) {
+            if (bumpRev) profileRev++;
             let audioInputId = currentAudioInputId;
             let videoInputId = currentVideoInputId;
             let audioOutputId = currentAudioOutputId;
@@ -1921,8 +1926,8 @@
             if (typeof status.profileRev === 'number') {
                 profileRev = status.profileRev;
             }
-            if (typeof status.nickname === 'string' && status.nickname) {
-                userNickname = status.nickname;
+            if (typeof status.nickname === 'string') {
+                userNickname = status.nickname.trim() || 'Guest';
                 const activeEl = document.activeElement;
                 if (nicknameInput && activeEl !== nicknameInput) nicknameInput.value = userNickname;
                 const sNick = document.getElementById('settingsNicknameInput');
@@ -1965,7 +1970,7 @@
                 if (settingsOtg) settingsOtg.checked = isOnTheGoMode;
             }
             if (typeof updateLocalLabel === 'function') updateLocalLabel();
-            savePreferences();
+            savePreferences(false);
         }
 
         async function testSpeaker(selectId) {

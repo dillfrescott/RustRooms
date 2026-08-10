@@ -593,10 +593,7 @@ pub(crate) async fn handle_socket(
                                                 if let Some(n) =
                                                     d.get("nickname").and_then(|v| v.as_str())
                                                 {
-                                                    status.nickname = n
-                                                        .chars()
-                                                        .take(MAX_NICKNAME_LEN)
-                                                        .collect();
+                                                    status.nickname = normalize_nickname(n);
                                                 }
                                                 if let Some(a) = d.get("avatar") {
                                                     if a.is_null() {

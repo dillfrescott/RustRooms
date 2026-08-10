@@ -164,6 +164,19 @@ pub(crate) fn current_unix_secs() -> u64 {
         .as_secs()
 }
 
+// Canonical nickname form: trimmed, capped, never empty. The server stores
+// and broadcasts only normalized nicknames so every client renders the same
+// value ("Guest" when unset) — an empty nickname can't mean different things
+// to the owner and to everyone else.
+pub(crate) fn normalize_nickname(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "Guest".to_string()
+    } else {
+        trimmed.chars().take(MAX_NICKNAME_LEN).collect()
+    }
+}
+
 // Resolves the canonical status for a joining identity. If the server already
 // holds a profile for it (a reconnect before the old socket's death is
 // noticed), the stored copy wins unless the client provably saved something
@@ -177,7 +190,7 @@ pub(crate) fn reconcile_join_status(
 ) -> UserStatus {
     match existing {
         Some(prev) if prev.profile_rev >= client_status.profile_rev => UserStatus {
-            nickname: prev.nickname.clone(),
+            nickname: normalize_nickname(&prev.nickname),
             avatar: prev.avatar.clone(),
             is_gif: prev.is_gif,
             static_frame: prev.static_frame.clone(),
@@ -188,7 +201,11 @@ pub(crate) fn reconcile_join_status(
             is_on_the_go_mode: prev.is_on_the_go_mode,
             profile_rev: prev.profile_rev,
         },
-        _ => client_status,
+        _ => {
+            let mut client_status = client_status;
+            client_status.nickname = normalize_nickname(&client_status.nickname);
+            client_status
+        }
     }
 }
 
@@ -326,5 +343,27 @@ mod tests {
         assert_eq!(resolved.nickname, "Lisa");
         // Per-connection state always reflects the new connection.
         assert!(!resolved.is_screen_sharing);
+    }
+
+    #[test]
+    fn empty_nickname_is_normalized_to_guest() {
+        // An empty/whitespace nickname must never be stored: the owner sees
+        // "Guest" locally, so everyone else must too. Otherwise the server
+        // and the owner disagree forever (until reconnect).
+        for raw in ["", "   ", "\t\n"] {
+            let client = test_status(raw, 6);
+            let resolved = reconcile_join_status(None, client);
+            assert_eq!(resolved.nickname, "Guest");
+            assert_eq!(resolved.profile_rev, 6);
+        }
+    }
+
+    #[test]
+    fn normalize_nickname_trims_and_caps() {
+        assert_eq!(normalize_nickname("  Alice  "), "Alice");
+        assert_eq!(normalize_nickname(""), "Guest");
+        assert_eq!(normalize_nickname("   "), "Guest");
+        let long = "a".repeat(MAX_NICKNAME_LEN + 10);
+        assert_eq!(normalize_nickname(&long).chars().count(), MAX_NICKNAME_LEN);
     }
 }
