@@ -1,7 +1,7 @@
 use crate::{
     distributed::{
-        cleanup_redis_node, distributed_user_data, process_redis_message, reconcile_redis_node,
-        schedule_empty_room_cleanup,
+        cleanup_redis_node, distributed_user_data, is_valid_distributed_message,
+        process_redis_message, reconcile_redis_node, schedule_empty_room_cleanup,
     },
     state::*,
 };
@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 
 const PROTOCOL_VERSION: u8 = 1;
@@ -22,6 +22,8 @@ const MAX_REDIS_FRAME_SIZE: usize = DISTRIBUTED_MAX_MESSAGE_SIZE;
 const MAX_REDIS_CHUNKS: usize = MAX_REDIS_FRAME_SIZE.div_ceil(REDIS_CHUNK_SIZE);
 const RECONNECT_MAX_SECS: u64 = 30;
 const CHUNK_TTL_SECS: u64 = 60;
+const MAX_PENDING_CHUNK_ASSEMBLIES: usize = 256;
+const MAX_PENDING_SNAPSHOTS: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -59,15 +61,23 @@ struct RedisChunk {
 }
 
 struct ChunkAssembly {
-    created_at: Instant,
+    last_activity: Instant,
     total: usize,
     bytes: usize,
     parts: Vec<Option<String>>,
 }
 
 struct SnapshotAssembly {
-    created_at: Instant,
+    last_activity: Instant,
     users: HashSet<RemoteUserKey>,
+    // Live events can arrive through a faster Redis endpoint while an older
+    // snapshot is still streaming through another one. Patch them into every
+    // in-flight snapshot so SnapshotEnd cannot resurrect a departed user or
+    // remove a user who joined after SnapshotStart.
+    removed_users: HashSet<RemoteUserKey>,
+    // A delayed snapshot must not recreate a channel that a newer live
+    // rename/delete already superseded through another Redis path.
+    superseded_channels: HashSet<(String, String)>,
 }
 
 type LastSeen = HashMap<String, Instant>;
@@ -79,6 +89,7 @@ struct RedisRuntime {
     last_seen: Arc<Mutex<LastSeen>>,
     assemblies: Arc<Mutex<Assemblies>>,
     snapshots: Arc<Mutex<Snapshots>>,
+    snapshot_permits: Arc<Semaphore>,
 }
 
 pub(crate) fn parse_redis_urls<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
@@ -98,11 +109,20 @@ pub(crate) fn parse_redis_urls<'a>(values: impl IntoIterator<Item = &'a str>) ->
 }
 
 pub(crate) fn spawn_redis_distributed(state: AppState, redis_urls: Vec<String>, prefix: String) {
-    let channel = format!("{}:events:v1", prefix.trim().trim_end_matches(':'));
+    let prefix = prefix.trim().trim_end_matches(':');
+    let prefix = if prefix.is_empty() {
+        "rustrooms"
+    } else {
+        prefix
+    };
+    let channel = format!("{prefix}:events:v1");
     let runtime = RedisRuntime {
         last_seen: Arc::new(Mutex::new(HashMap::new())),
         assemblies: Arc::new(Mutex::new(HashMap::new())),
         snapshots: Arc::new(Mutex::new(HashMap::new())),
+        // Bound profile cloning and Redis writes when many nodes request a
+        // snapshot at once.
+        snapshot_permits: Arc::new(Semaphore::new(2)),
     };
 
     for (index, redis_url) in redis_urls.into_iter().enumerate() {
@@ -203,9 +223,16 @@ async fn run_session(
         },
     )
     .await?;
-    // Re-announce this node as well. This heals other instances that expired
-    // its users during a Redis or process outage.
-    publish_local_snapshot(&mut publisher, channel, state, None).await?;
+    // Re-announce this node as well. Publish in the background: a large
+    // snapshot must not stop this session from reading heartbeats/events (and
+    // falsely timing out healthy peers) while Redis accepts the payload.
+    spawn_local_snapshot(
+        publisher.clone(),
+        channel.to_string(),
+        state.clone(),
+        None,
+        runtime.snapshot_permits.clone(),
+    );
 
     let mut heartbeat = tokio::time::interval(Duration::from_secs(REDIS_HEARTBEAT_SECS));
     heartbeat.tick().await;
@@ -234,6 +261,7 @@ async fn run_session(
                         state,
                         &runtime.last_seen,
                         &runtime.snapshots,
+                        &runtime.snapshot_permits,
                     ).await?;
                 }
             }
@@ -257,19 +285,18 @@ async fn run_session(
                         ).await?;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        eprintln!("REDIS DISTRIBUTED [{label}]: Outbound queue lagged by {skipped} event(s); publishing a fresh snapshot request");
-                        publish_envelope(
-                            &mut publisher,
-                            channel,
-                            &RedisEnvelope {
-                                version: PROTOCOL_VERSION,
-                                source_node_id: state.node_id.clone(),
-                                target_node_id: None,
-                                snapshot_id: None,
-                                kind: EnvelopeKind::SnapshotRequest,
-                                message: None,
-                            },
-                        ).await?;
+                        eprintln!("REDIS DISTRIBUTED [{label}]: Outbound queue lagged by {skipped} event(s); re-announcing local state");
+                        // This receiver skipped this node's outbound events.
+                        // Asking peers for their snapshots would not repair
+                        // their stale view of us; publish our authoritative
+                        // local snapshot instead.
+                        spawn_local_snapshot(
+                            publisher.clone(),
+                            channel.to_string(),
+                            state.clone(),
+                            None,
+                            runtime.snapshot_permits.clone(),
+                        );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
                 }
@@ -291,10 +318,10 @@ async fn run_session(
             _ = liveness.tick() => {
                 cleanup_stale_nodes(state, &runtime.last_seen, &runtime.snapshots).await;
                 runtime.assemblies.lock().await.retain(|_, assembly| {
-                    assembly.created_at.elapsed() < Duration::from_secs(CHUNK_TTL_SECS)
+                    assembly.last_activity.elapsed() < Duration::from_secs(CHUNK_TTL_SECS)
                 });
                 runtime.snapshots.lock().await.retain(|_, snapshot| {
-                    snapshot.created_at.elapsed() < Duration::from_secs(CHUNK_TTL_SECS)
+                    snapshot.last_activity.elapsed() < Duration::from_secs(CHUNK_TTL_SECS)
                 });
             }
         }
@@ -308,6 +335,7 @@ async fn handle_envelope(
     state: &AppState,
     last_seen: &Arc<Mutex<LastSeen>>,
     snapshots: &Arc<Mutex<Snapshots>>,
+    snapshot_permits: &Arc<Semaphore>,
 ) -> redis::RedisResult<()> {
     if envelope.version != PROTOCOL_VERSION
         || envelope.source_node_id == state.node_id
@@ -332,39 +360,59 @@ async fn handle_envelope(
     match envelope.kind {
         EnvelopeKind::Heartbeat => {}
         EnvelopeKind::SnapshotRequest => {
-            publish_local_snapshot(
-                publisher,
-                channel,
-                state,
+            spawn_local_snapshot(
+                publisher.clone(),
+                channel.to_string(),
+                state.clone(),
                 Some(envelope.source_node_id.clone()),
-            )
-            .await?;
+                snapshot_permits.clone(),
+            );
         }
         EnvelopeKind::SnapshotStart => {
             let Some(snapshot_id) = valid_snapshot_id(envelope.snapshot_id) else {
                 return Ok(());
             };
-            snapshots.lock().await.insert(
-                (envelope.source_node_id, snapshot_id),
-                SnapshotAssembly {
-                    created_at: Instant::now(),
-                    users: HashSet::new(),
-                },
-            );
+            let mut snapshots = snapshots.lock().await;
+            let key = (envelope.source_node_id, snapshot_id);
+            // Duplicate starts can be delivered by redundant Redis paths. Do
+            // not reset records already assembled from the faster path.
+            if let Some(snapshot) = snapshots.get_mut(&key) {
+                snapshot.last_activity = Instant::now();
+            } else {
+                if snapshots.len() >= MAX_PENDING_SNAPSHOTS
+                    && let Some(oldest) = snapshots
+                        .iter()
+                        .min_by_key(|(_, snapshot)| snapshot.last_activity)
+                        .map(|(key, _)| key.clone())
+                {
+                    snapshots.remove(&oldest);
+                }
+                snapshots.insert(
+                    key,
+                    SnapshotAssembly {
+                        last_activity: Instant::now(),
+                        users: HashSet::new(),
+                        removed_users: HashSet::new(),
+                        superseded_channels: HashSet::new(),
+                    },
+                );
+            }
         }
         EnvelopeKind::SnapshotEnd => {
             let Some(snapshot_id) = valid_snapshot_id(envelope.snapshot_id) else {
                 return Ok(());
             };
-            let snapshot = snapshots
-                .lock()
-                .await
-                .remove(&(envelope.source_node_id.clone(), snapshot_id));
+            // Keep the snapshot mutex until reconciliation finishes. A live
+            // join otherwise could slip between remove() and reconcile() and
+            // be incorrectly treated as missing from the older snapshot.
+            let mut snapshot_guard = snapshots.lock().await;
+            let snapshot = snapshot_guard.remove(&(envelope.source_node_id.clone(), snapshot_id));
             let Some(snapshot) = snapshot else {
                 return Ok(());
             };
             let affected_rooms =
                 reconcile_redis_node(state, &envelope.source_node_id, &snapshot.users).await;
+            drop(snapshot_guard);
             for room_id in affected_rooms {
                 schedule_empty_room_cleanup(state, &room_id).await;
             }
@@ -373,6 +421,14 @@ async fn handle_envelope(
             let Some(message) = envelope.message else {
                 return Ok(());
             };
+            if !is_valid_distributed_message(&message) {
+                return Ok(());
+            }
+            let user_key = (
+                message.room_id.clone(),
+                message.channel_id.clone(),
+                message.user_id.clone(),
+            );
             if let Some(snapshot_id) = envelope.snapshot_id {
                 let Some(snapshot_id) = valid_snapshot_id(Some(snapshot_id)) else {
                     return Ok(());
@@ -383,12 +439,84 @@ async fn handle_envelope(
                 else {
                     return Ok(());
                 };
+                snapshot.last_activity = Instant::now();
+                if snapshot
+                    .superseded_channels
+                    .contains(&(message.room_id.clone(), message.channel_id.clone()))
+                {
+                    return Ok(());
+                }
                 if message.msg_type == "user-joined" {
-                    snapshot.users.insert((
-                        message.room_id.clone(),
-                        message.channel_id.clone(),
-                        message.user_id.clone(),
-                    ));
+                    if snapshot.removed_users.contains(&user_key) {
+                        // A live leave newer than this snapshot record already
+                        // arrived through another endpoint.
+                        return Ok(());
+                    }
+                    snapshot.users.insert(user_key);
+                }
+            } else {
+                // Fold live changes into snapshots currently being assembled.
+                // Independent Redis paths can have very different latency.
+                let is_presence = matches!(
+                    message.msg_type.as_str(),
+                    "user-joined" | "user-left" | "user-kicked"
+                );
+                let is_channel_change = matches!(
+                    message.msg_type.as_str(),
+                    "rename-channel" | "delete-channel"
+                );
+                if is_presence || is_channel_change {
+                    let mut snapshots = snapshots.lock().await;
+                    for ((source, _), snapshot) in snapshots.iter_mut() {
+                        if is_presence {
+                            let applies = message.msg_type == "user-kicked"
+                                || source == &envelope.source_node_id;
+                            if applies {
+                                snapshot.last_activity = Instant::now();
+                                if message.msg_type == "user-joined" {
+                                    snapshot.removed_users.remove(&user_key);
+                                    snapshot.users.insert(user_key.clone());
+                                } else {
+                                    snapshot.users.remove(&user_key);
+                                    snapshot.removed_users.insert(user_key.clone());
+                                }
+                            }
+                        }
+                        if is_channel_change {
+                            snapshot.last_activity = Instant::now();
+                            let old_channel = (message.room_id.clone(), message.channel_id.clone());
+                            snapshot.superseded_channels.insert(old_channel.clone());
+                            if message.msg_type == "rename-channel"
+                                && let Some(new_channel) = message
+                                    .data
+                                    .as_ref()
+                                    .and_then(|data| data.get("newName"))
+                                    .and_then(serde_json::Value::as_str)
+                                    .and_then(normalize_channel_id)
+                            {
+                                let moved: Vec<_> = snapshot
+                                    .users
+                                    .iter()
+                                    .filter(|(rid, cid, _)| {
+                                        rid == &old_channel.0 && cid == &old_channel.1
+                                    })
+                                    .cloned()
+                                    .collect();
+                                for old_key in moved {
+                                    snapshot.users.remove(&old_key);
+                                    snapshot.users.insert((
+                                        old_key.0,
+                                        new_channel.clone(),
+                                        old_key.2,
+                                    ));
+                                }
+                            } else {
+                                snapshot.users.retain(|(rid, cid, _)| {
+                                    rid != &old_channel.0 || cid != &old_channel.1
+                                });
+                            }
+                        }
+                    }
                 }
             }
             process_redis_message(message, &envelope.source_node_id, state).await;
@@ -460,12 +588,22 @@ async fn accept_chunk(raw: &str, assemblies: &Arc<Mutex<Assemblies>>) -> Option<
 
     let key = (chunk.sender.clone(), chunk.transmission_id.clone());
     let mut pending = assemblies.lock().await;
+    if !pending.contains_key(&key)
+        && pending.len() >= MAX_PENDING_CHUNK_ASSEMBLIES
+        && let Some(oldest) = pending
+            .iter()
+            .min_by_key(|(_, assembly)| assembly.last_activity)
+            .map(|(key, _)| key.clone())
+    {
+        pending.remove(&oldest);
+    }
     let assembly = pending.entry(key.clone()).or_insert_with(|| ChunkAssembly {
-        created_at: Instant::now(),
+        last_activity: Instant::now(),
         total: chunk.total,
         bytes: 0,
         parts: (0..chunk.total).map(|_| None).collect(),
     });
+    assembly.last_activity = Instant::now();
     if assembly.total != chunk.total {
         pending.remove(&key);
         return None;
@@ -507,6 +645,25 @@ fn split_string(value: &str, max_bytes: usize) -> Vec<String> {
         start = end;
     }
     parts
+}
+
+fn spawn_local_snapshot(
+    mut publisher: redis::aio::MultiplexedConnection,
+    channel: String,
+    state: AppState,
+    target_node_id: Option<String>,
+    snapshot_permits: Arc<Semaphore>,
+) {
+    tokio::spawn(async move {
+        let Ok(_permit) = snapshot_permits.acquire_owned().await else {
+            return;
+        };
+        if let Err(error) =
+            publish_local_snapshot(&mut publisher, &channel, &state, target_node_id).await
+        {
+            eprintln!("REDIS DISTRIBUTED: Failed to publish local snapshot: {error}");
+        }
+    });
 }
 
 async fn publish_local_snapshot(
@@ -566,8 +723,11 @@ fn local_snapshot_stream(state: AppState) -> tokio::sync::mpsc::Receiver<Distrib
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         let times = state.channel_creation_times.lock().await.clone();
-        let rooms = state.rooms.lock().await;
-        for (room_id, room) in rooms.iter() {
+        // Clone the local view once and release the mutex before waiting on
+        // Redis. Holding the room lock while streaming a multi-megabyte
+        // snapshot can otherwise freeze joins, leaves, and signaling.
+        let rooms = state.rooms.lock().await.clone();
+        for (room_id, room) in &rooms {
             for (channel_id, channel) in room {
                 let created_at = times
                     .get(room_id)

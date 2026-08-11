@@ -1,7 +1,8 @@
 use crate::{
     distributed::{
         broadcast_channel_list, broadcast_channel_upsert, distributed_broadcast,
-        remove_remote_user, schedule_empty_room_cleanup,
+        remove_remote_channel_owners, remove_remote_user, remove_remote_user_owner,
+        rename_remote_user_owners, schedule_empty_room_cleanup,
     },
     routes::host_is_allowed,
     state::*,
@@ -898,6 +899,13 @@ pub(crate) async fn handle_socket(
                                             &kick_uid,
                                         );
                                     }
+                                    remove_remote_user_owner(
+                                        &state.remote_user_owners,
+                                        &room_id,
+                                        &channel_id,
+                                        &kick_uid,
+                                    )
+                                    .await;
 
                                     if let Some(kicked_tx) = kicked_tx {
                                         let _ = kicked_tx
@@ -956,6 +964,13 @@ pub(crate) async fn handle_socket(
                                                 &kick_uid,
                                             );
                                         }
+                                        remove_remote_user_owner(
+                                            &state.remote_user_owners,
+                                            &room_id,
+                                            &channel_id,
+                                            &kick_uid,
+                                        )
+                                        .await;
                                         broadcast_channel_list(
                                             &rooms,
                                             &remote_users,
@@ -1104,6 +1119,13 @@ pub(crate) async fn handle_socket(
                                                 }
                                             }
                                         }
+                                        rename_remote_user_owners(
+                                            &state.remote_user_owners,
+                                            &room_id,
+                                            &target_channel_id,
+                                            &new_name_str,
+                                        )
+                                        .await;
 
                                         distributed_broadcast(
                                             &state,
@@ -1194,6 +1216,12 @@ pub(crate) async fn handle_socket(
                                             room_times.remove(&target_channel_id);
                                         }
                                     }
+                                    remove_remote_channel_owners(
+                                        &state.remote_user_owners,
+                                        &room_id,
+                                        &target_channel_id,
+                                    )
+                                    .await;
 
                                     distributed_broadcast(
                                         &state,

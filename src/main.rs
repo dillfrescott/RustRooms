@@ -27,11 +27,7 @@ async fn main() {
         .ok()
         .map(|p| p.trim().to_string())
         .filter(|s| !s.is_empty());
-    let raw_redis_urls: Vec<_> = ["REDIS_URL", "REDIS_URLS"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .collect();
-    let redis_urls = parse_redis_urls(raw_redis_urls.iter().map(String::as_str));
+    let redis_urls = parse_redis_urls(std::env::var("REDIS_URL").ok().iter().map(String::as_str));
     let redis_prefix = std::env::var("REDIS_PREFIX")
         .ok()
         .map(|prefix| prefix.trim().to_string())

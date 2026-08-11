@@ -23,15 +23,18 @@ pub(crate) async fn process_redis_message(
     message: DistributedMessage,
     source_node_id: &str,
     state: &AppState,
-) {
-    if !is_valid_distributed_message(&message) {
-        return;
+) -> bool {
+    if !is_valid_distributed_message(&message)
+        || !remember_distributed_message(&message, state).await
+        || !update_remote_ownership(&message, source_node_id, &state.remote_user_owners).await
+    {
+        return false;
     }
-    update_remote_ownership(&message, source_node_id, &state.remote_user_owners).await;
-    handle_distributed_message(&message, &state.rooms, &state.remote_users, state).await;
+    apply_distributed_message(&message, &state.rooms, &state.remote_users, state).await;
+    true
 }
 
-fn is_valid_distributed_message(msg: &DistributedMessage) -> bool {
+pub(crate) fn is_valid_distributed_message(msg: &DistributedMessage) -> bool {
     if !is_valid_room_id(&msg.room_id)
         || normalize_channel_id(&msg.channel_id).as_deref() != Some(msg.channel_id.as_str())
         || Uuid::parse_str(&msg.user_id).is_err()
@@ -94,7 +97,7 @@ async fn update_remote_ownership(
     msg: &DistributedMessage,
     source_node_id: &str,
     owners: &RemoteUserOwnersMap,
-) {
+) -> bool {
     let key = (
         msg.room_id.clone(),
         msg.channel_id.clone(),
@@ -102,50 +105,84 @@ async fn update_remote_ownership(
     );
     let mut owners = owners.lock().await;
     match msg.msg_type.as_str() {
-        "user-joined" => {
-            owners.insert(key, source_node_id.to_string());
-        }
+        "user-joined" => match owners.get(&key) {
+            // First owner wins. UUID collisions are extremely unlikely, but a
+            // delayed snapshot must not steal a live identity from another node.
+            Some(owner) => owner == source_node_id,
+            None => {
+                owners.insert(key, source_node_id.to_string());
+                true
+            }
+        },
         "user-left" => {
             if owners
                 .get(&key)
                 .is_some_and(|owner| owner == source_node_id)
             {
                 owners.remove(&key);
+                true
+            } else {
+                // A delayed leave from an old owner must not remove the current
+                // owner's presence.
+                false
             }
         }
+        "user-update" | "cam-toggle" | "screen-toggle" => owners
+            .get(&key)
+            .is_some_and(|owner| owner == source_node_id),
         // A kick is a deployment-wide moderation event and can originate on
         // a node other than the one hosting the target.
         "user-kicked" => {
             owners.remove(&key);
+            true
         }
-        "rename-channel" => {
-            let Some(new_name) = msg
-                .data
-                .as_ref()
-                .and_then(|data| data.get("newName"))
-                .and_then(|value| value.as_str())
-                .and_then(normalize_channel_id)
-            else {
-                return;
-            };
-            let moved: Vec<_> = owners
-                .keys()
-                .filter(|(room_id, channel_id, _)| {
-                    room_id == &msg.room_id && channel_id == &msg.channel_id
-                })
-                .cloned()
-                .collect();
-            for old_key in moved {
-                if let Some(owner) = owners.remove(&old_key) {
-                    owners.insert((old_key.0, new_name.clone(), old_key.2), owner);
-                }
-            }
-        }
-        "delete-channel" => owners.retain(|(room_id, channel_id, _), _| {
-            room_id != &msg.room_id || channel_id != &msg.channel_id
-        }),
-        _ => {}
+        _ => true,
     }
+}
+
+pub(crate) async fn rename_remote_user_owners(
+    owners: &RemoteUserOwnersMap,
+    room_id: &str,
+    old_channel_id: &str,
+    new_channel_id: &str,
+) {
+    let mut owners = owners.lock().await;
+    let moved: Vec<_> = owners
+        .keys()
+        .filter(|(rid, cid, _)| rid == room_id && cid == old_channel_id)
+        .cloned()
+        .collect();
+    for old_key in moved {
+        if let Some(owner) = owners.remove(&old_key) {
+            owners
+                .entry((old_key.0, new_channel_id.to_string(), old_key.2))
+                .or_insert(owner);
+        }
+    }
+}
+
+pub(crate) async fn remove_remote_channel_owners(
+    owners: &RemoteUserOwnersMap,
+    room_id: &str,
+    channel_id: &str,
+) {
+    owners
+        .lock()
+        .await
+        .retain(|(rid, cid, _), _| rid != room_id || cid != channel_id);
+}
+
+pub(crate) async fn remove_remote_user_owner(
+    owners: &RemoteUserOwnersMap,
+    room_id: &str,
+    channel_id: &str,
+    user_id: &str,
+) {
+    owners.lock().await.remove(&(
+        room_id.to_string(),
+        channel_id.to_string(),
+        user_id.to_string(),
+    ));
 }
 
 pub(crate) async fn cleanup_redis_node(state: &AppState, source_node_id: &str) -> HashSet<String> {
@@ -172,11 +209,45 @@ pub(crate) async fn reconcile_redis_node(
 
     let mut affected_rooms = HashSet::new();
     for (room_id, channel_id, user_id) in dead {
-        let removed = {
-            let mut remote = state.remote_users.lock().await;
-            remove_remote_user(&mut remote, &room_id, &channel_id, &user_id)
+        let removed_channels = {
+            // Keep ownership locked through removal. A user with the same ID
+            // may join on another node immediately after the stale owner was
+            // removed; cleanup must not delete that replacement's presence.
+            let owners = state.remote_user_owners.lock().await;
+            let key = (room_id.clone(), channel_id.clone(), user_id.clone());
+            if owners.contains_key(&key) {
+                Vec::new()
+            } else {
+                let mut remote = state.remote_users.lock().await;
+                if remove_remote_user(&mut remote, &room_id, &channel_id, &user_id) {
+                    vec![channel_id]
+                } else {
+                    // A channel rename may have moved the remote record just
+                    // before its ownership key was moved. Prune any matching
+                    // record that has no owner instead of leaving a permanent
+                    // ghost in the renamed channel.
+                    let orphan_channels: Vec<String> = remote
+                        .get(&room_id)
+                        .into_iter()
+                        .flat_map(|room| room.iter())
+                        .filter(|(cid, users)| {
+                            users.contains_key(&user_id)
+                                && !owners.contains_key(&(
+                                    room_id.clone(),
+                                    (*cid).clone(),
+                                    user_id.clone(),
+                                ))
+                        })
+                        .map(|(cid, _)| cid.clone())
+                        .collect();
+                    for cid in &orphan_channels {
+                        remove_remote_user(&mut remote, &room_id, cid, &user_id);
+                    }
+                    orphan_channels
+                }
+            }
         };
-        if !removed {
+        if removed_channels.is_empty() {
             continue;
         }
         let notify = serde_json::to_string(&SignalMessage {
@@ -187,9 +258,13 @@ pub(crate) async fn reconcile_redis_node(
         })
         .unwrap();
         let rooms = state.rooms.lock().await;
-        if let Some(channel) = rooms.get(&room_id).and_then(|room| room.get(&channel_id)) {
-            for (tx, _) in channel.values() {
-                let _ = tx.try_send(Ok(Message::Text(notify.clone().into())));
+        if let Some(room) = rooms.get(&room_id) {
+            for channel_id in removed_channels {
+                if let Some(channel) = room.get(&channel_id) {
+                    for (tx, _) in channel.values() {
+                        let _ = tx.try_send(Ok(Message::Text(notify.clone().into())));
+                    }
+                }
             }
         }
         drop(rooms);
@@ -305,28 +380,43 @@ pub(crate) fn remove_remote_user(
     removed
 }
 
+async fn remember_distributed_message(msg: &DistributedMessage, state: &AppState) -> bool {
+    let mut ids = state.recent_distributed_msg_ids.lock().await;
+    if !ids.insert(msg.msg_id.clone()) {
+        return false;
+    }
+
+    let mut history = state.distributed_msg_history.lock().await;
+    history.push_back(msg.msg_id.clone());
+    // This must comfortably exceed the outbound queue: independent Redis
+    // paths can have very different latency and deliver an old duplicate well
+    // after the fast path. Keep the cache bounded to avoid unbounded growth.
+    if history.len() > 16_384
+        && let Some(oldest) = history.pop_front()
+    {
+        ids.remove(&oldest);
+    }
+    true
+}
+
+#[cfg(test)]
 async fn handle_distributed_message(
     msg: &DistributedMessage,
     rooms: &RoomMap,
     remote_users: &RemoteUsersMap,
     state: &AppState,
 ) {
-    {
-        let mut ids = state.recent_distributed_msg_ids.lock().await;
-        if ids.contains(&msg.msg_id) {
-            return;
-        }
-        ids.insert(msg.msg_id.clone());
-
-        let mut history = state.distributed_msg_history.lock().await;
-        history.push_back(msg.msg_id.clone());
-        if history.len() > 1000
-            && let Some(oldest) = history.pop_front()
-        {
-            ids.remove(&oldest);
-        }
+    if remember_distributed_message(msg, state).await {
+        apply_distributed_message(msg, rooms, remote_users, state).await;
     }
+}
 
+async fn apply_distributed_message(
+    msg: &DistributedMessage,
+    rooms: &RoomMap,
+    remote_users: &RemoteUsersMap,
+    state: &AppState,
+) {
     match msg.msg_type.as_str() {
         "channel-upsert" => {
             let created_at = msg
@@ -350,6 +440,11 @@ async fn handle_distributed_message(
                 &msg.room_id,
             )
             .await;
+            // A node can first discover a room from an empty snapshot and then
+            // miss the originating node's local grace-period deletion (Redis
+            // Pub/Sub has no retained delete event). Give metadata-only rooms
+            // the same bounded lifetime; a following user-joined cancels it.
+            schedule_empty_room_cleanup(state, &msg.room_id).await;
         }
         "user-joined" => {
             if let Some(ref status) = msg.status {
@@ -414,8 +509,29 @@ async fn handle_distributed_message(
         }
         "user-left" | "user-kicked" => {
             let removed_remote = {
-                let mut rl = remote_users.lock().await;
-                remove_remote_user(&mut rl, &msg.room_id, &msg.channel_id, &msg.user_id)
+                // user-left authorization removes the old ownership record
+                // before this state update. Hold the map while removing so a
+                // concurrent replacement join cannot be deleted by the old
+                // connection's delayed leave.
+                let owners = if msg.msg_type == "user-left" {
+                    Some(state.remote_user_owners.lock().await)
+                } else {
+                    None
+                };
+                let key = (
+                    msg.room_id.clone(),
+                    msg.channel_id.clone(),
+                    msg.user_id.clone(),
+                );
+                if owners
+                    .as_ref()
+                    .is_some_and(|owners| owners.contains_key(&key))
+                {
+                    false
+                } else {
+                    let mut rl = remote_users.lock().await;
+                    remove_remote_user(&mut rl, &msg.room_id, &msg.channel_id, &msg.user_id)
+                }
             };
             // A kick may target a user hosted on this node (cross-node kick):
             // remove them from the local channel and close their socket.
@@ -630,6 +746,13 @@ async fn handle_distributed_message(
                         }
                     }
                     drop(rl);
+                    rename_remote_user_owners(
+                        &state.remote_user_owners,
+                        &msg.room_id,
+                        &msg.channel_id,
+                        &new_name,
+                    )
+                    .await;
 
                     {
                         let mut times = state.channel_creation_times.lock().await;
@@ -686,6 +809,8 @@ async fn handle_distributed_message(
                 }
             }
             drop(rl);
+            remove_remote_channel_owners(&state.remote_user_owners, &msg.room_id, &msg.channel_id)
+                .await;
             {
                 let mut times = state.channel_creation_times.lock().await;
                 if let Some(room_times) = times.get_mut(&msg.room_id) {
@@ -1043,6 +1168,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_leave_from_a_non_owner_does_not_remove_the_live_user() {
+        let state = test_state();
+        let owner = Uuid::new_v4().to_string();
+        let stale_node = Uuid::new_v4().to_string();
+        let uid = Uuid::new_v4().to_string();
+        let mut joined = test_distributed_message_typed("user-joined", "room", "General", &uid);
+        joined.status = Some(test_user_status());
+        assert!(process_redis_message(joined, &owner, &state).await);
+
+        let left = test_distributed_message_typed("user-left", "room", "General", &uid);
+        assert!(!process_redis_message(left, &stale_node, &state).await);
+
+        let key = ("room".to_string(), "General".to_string(), uid.clone());
+        assert_eq!(
+            state.remote_user_owners.lock().await.get(&key),
+            Some(&owner)
+        );
+        assert!(
+            state
+                .remote_users
+                .lock()
+                .await
+                .get("room")
+                .unwrap()
+                .get("General")
+                .unwrap()
+                .contains_key(&uid)
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_owner_keys_follow_channel_renames() {
+        let state = test_state();
+        let owner = Uuid::new_v4().to_string();
+        let uid = Uuid::new_v4().to_string();
+        let old_key = ("room".to_string(), "old".to_string(), uid.clone());
+        state
+            .remote_user_owners
+            .lock()
+            .await
+            .insert(old_key.clone(), owner.clone());
+
+        rename_remote_user_owners(&state.remote_user_owners, "room", "old", "new").await;
+
+        let owners = state.remote_user_owners.lock().await;
+        assert!(!owners.contains_key(&old_key));
+        assert_eq!(
+            owners.get(&("room".to_string(), "new".to_string(), uid)),
+            Some(&owner)
+        );
+    }
+
+    #[tokio::test]
     async fn redis_timeout_removes_only_users_owned_by_the_dead_node() {
         let state = test_state();
         let dead_owner = Uuid::new_v4().to_string();
@@ -1061,6 +1239,31 @@ mod tests {
         let users = remote.get("room").unwrap().get("General").unwrap();
         assert!(!users.contains_key(&dead_uid));
         assert!(users.contains_key(&live_uid));
+        assert!(affected.contains("room"));
+    }
+
+    #[tokio::test]
+    async fn stale_node_cleanup_prunes_a_user_moved_before_its_owner_key() {
+        let state = test_state();
+        let owner = Uuid::new_v4().to_string();
+        let uid = Uuid::new_v4().to_string();
+        state.remote_user_owners.lock().await.insert(
+            ("room".to_string(), "old".to_string(), uid.clone()),
+            owner.clone(),
+        );
+        state
+            .remote_users
+            .lock()
+            .await
+            .entry("room".to_string())
+            .or_default()
+            .entry("new".to_string())
+            .or_default()
+            .insert(uid, test_user_status());
+
+        let affected = cleanup_redis_node(&state, &owner).await;
+
+        assert!(state.remote_users.lock().await.get("room").is_none());
         assert!(affected.contains("room"));
     }
 

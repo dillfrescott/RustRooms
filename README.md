@@ -38,7 +38,7 @@ Set the same `REDIS_URL` on every instance to make them one logical RustRooms de
 REDIS_URL=rediss://default:password@your-upstash-host:6379
 
 # Or two or more independent endpoints for redundancy
-REDIS_URLS=rediss://default:password@redis-1.example.com:6379,rediss://default:password@redis-2.example.com:6379
+REDIS_URL=rediss://default:password@redis-1.example.com:6379,rediss://default:password@redis-2.example.com:6379
 ```
 
 Upstash's TLS `rediss://` endpoint is recommended. With multiple endpoints, every instance publishes and subscribes through all of them; distributed traffic continues while any shared endpoint remains available. The Redis servers do not need Redis-level replication. Configure the same endpoint list on every RustRooms instance.
@@ -48,7 +48,6 @@ Connections retry independently with backoff, nodes exchange authoritative snaps
 Configuration:
 
 * `REDIS_URL`: One URL or a comma-, semicolon-, or newline-separated list of standard `redis://` or TLS `rediss://` URLs.
-* `REDIS_URLS`: Optional additional list using the same format. This is convenient for multiple endpoints.
 * `REDIS_PREFIX`: Optional Pub/Sub namespace. Defaults to `rustrooms`. Set the same value on every instance, and use a different value when unrelated RustRooms deployments share Redis.
 
 Redis is a coordination transport only; audio and video remain peer-to-peer or use the configured TURN server.
