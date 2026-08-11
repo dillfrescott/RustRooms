@@ -15,7 +15,7 @@
         if (channelId.toLowerCase() === 'general') {
             channelId = 'General';
         }
-        if (channelId.length > 32) channelId = channelId.substring(0, 32);
+        if ([...channelId].length > 32) channelId = [...channelId].slice(0, 32).join('');
 
         // Check if user changed the URL code and hit enter
         const lastRoomId = sessionStorage.getItem('rustrooms_last_room_id');
@@ -50,6 +50,7 @@
         let peerMicTrackId = {};
         let peerScreenAudioTrackId = {};
         let pendingCandidates = {};
+        const MAX_PENDING_ICE_CANDIDATES = 256;
         let userNickname = "Guest";
         // Monotonic revision of the locally persisted profile. Bumped on every
         // savePreferences and sent with join/update-user so the server can tell
@@ -730,14 +731,15 @@
             volControls.appendChild(row);
         }
 
+        const turnUrl = {{TURN_URL}};
         const rtcConfig = {
-            iceServers: [
-                {
-                    urls: {{TURN_URL}},
-                    username: {{TURN_USERNAME}},
-                    credential: {{TURN_CREDENTIAL}}
-                }
-            ]
+            // Browsers reject an ICE server whose URL is empty. Host
+            // candidates still work when TURN is intentionally unconfigured.
+            iceServers: turnUrl ? [{
+                urls: turnUrl,
+                username: {{TURN_USERNAME}},
+                credential: {{TURN_CREDENTIAL}}
+            }] : []
         };
 
         function getReconnectDelay(attempt) {
@@ -787,7 +789,6 @@
         let statsWindowVisible = false;
         let statsUpdateInterval = null;
         let prevStatsData = {};
-        let prevStatsTimestamp = 0;
 
         function toggleStatsWindow() {
             const statsWindow = document.getElementById('statsWindow');
@@ -804,7 +805,6 @@
                 statsWindow.style.right = `${right}px`;
                 statsWindow.classList.add('visible');
                 prevStatsData = {};
-                prevStatsTimestamp = 0;
                 startStatsUpdate();
             } else {
                 statsWindow.classList.remove('visible');
@@ -975,7 +975,6 @@
             }
 
             prevStatsData = newStatsData;
-            prevStatsTimestamp = nowMs;
 
             if (statJitter) statJitter.textContent = jitter;
             if (statVideoRes) statVideoRes.textContent = videoRes;

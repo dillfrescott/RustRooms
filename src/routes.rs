@@ -7,14 +7,20 @@ use axum::{
 use std::collections::HashMap;
 use uuid::Uuid;
 
+fn request_authority(headers: &axum::http::HeaderMap) -> Option<axum::http::uri::Authority> {
+    headers.get(header::HOST)?.to_str().ok()?.parse().ok()
+}
+
 fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
-    headers
-        .get(header::HOST)?
-        .to_str()
-        .ok()?
-        .parse::<axum::http::uri::Authority>()
-        .ok()
-        .map(|authority| authority.host().to_lowercase())
+    request_authority(headers).map(|authority| authority.host().to_lowercase())
+}
+
+fn encode_path_segment(value: &str) -> String {
+    let mut url = url::Url::parse("http://localhost/").expect("static base URL is valid");
+    url.path_segments_mut()
+        .expect("HTTP URLs support path segments")
+        .push(value);
+    url.path().trim_start_matches('/').to_string()
 }
 
 pub(crate) fn host_is_allowed(headers: &axum::http::HeaderMap, allowed_host: &str) -> bool {
@@ -22,12 +28,25 @@ pub(crate) fn host_is_allowed(headers: &axum::http::HeaderMap, allowed_host: &st
 }
 
 fn origin_matches_request_host(headers: &axum::http::HeaderMap) -> bool {
-    let origin_host = headers
+    let Some(authority) = request_authority(headers) else {
+        return false;
+    };
+    let Some(origin) = headers
         .get(header::ORIGIN)
         .and_then(|origin| origin.to_str().ok())
         .and_then(|value| url::Url::parse(value).ok())
-        .and_then(|url| url.host_str().map(str::to_lowercase));
-    origin_host == request_host(headers)
+    else {
+        return false;
+    };
+    let Some(origin_host) = origin.host_str() else {
+        return false;
+    };
+
+    let port_matches = match authority.port_u16() {
+        Some(request_port) => origin.port_or_known_default() == Some(request_port),
+        None => origin.port().is_none(),
+    };
+    origin_host.eq_ignore_ascii_case(authority.host()) && port_matches
 }
 
 pub(crate) async fn new_room(
@@ -78,14 +97,14 @@ pub(crate) async fn new_room(
         Uuid::new_v4().to_string()
     };
 
-    Ok(Redirect::to(&format!("/{}", room_id)))
+    Ok(Redirect::to(&format!("/{}", encode_path_segment(&room_id))))
 }
 
 pub(crate) async fn redirect_room_trailing_slash(Path(room_id): Path<String>) -> Redirect {
     // Validate before echoing into the Location header: control characters
     // (e.g. %0d%0a) would make Redirect::to panic.
     if is_valid_room_id(&room_id) {
-        Redirect::to(&format!("/{}", room_id))
+        Redirect::to(&format!("/{}", encode_path_segment(&room_id)))
     } else {
         Redirect::to("/")
     }
@@ -97,7 +116,11 @@ pub(crate) async fn redirect_channel_trailing_slash(
     if is_valid_room_id(&room_id)
         && let Some(channel_id) = normalize_channel_id(&channel_id)
     {
-        Redirect::to(&format!("/{}/{}", room_id, channel_id))
+        Redirect::to(&format!(
+            "/{}/{}",
+            encode_path_segment(&room_id),
+            encode_path_segment(&channel_id)
+        ))
     } else {
         Redirect::to("/")
     }
@@ -113,7 +136,11 @@ pub(crate) async fn redirect_ws_trailing_slash(
     if is_valid_room_id(&room_id)
         && let Some(channel_id) = normalize_channel_id(&channel_id)
     {
-        Redirect::to(&format!("/ws/{}/{}", room_id, channel_id))
+        Redirect::to(&format!(
+            "/ws/{}/{}",
+            encode_path_segment(&room_id),
+            encode_path_segment(&channel_id)
+        ))
     } else {
         Redirect::to("/")
     }
@@ -253,6 +280,20 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn new_room_percent_encodes_unicode_names() {
+        let state = test_state(None);
+        let params = HashMap::from([("name".to_string(), "café".to_string())]);
+        let response = new_room(State(state), HeaderMap::new(), Query(params))
+            .await
+            .unwrap()
+            .into_response();
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/caf%C3%A9"
+        );
+    }
+
     #[test]
     fn websocket_origin_must_match_the_request_host_exactly() {
         let mut headers = axum::http::HeaderMap::new();
@@ -262,5 +303,27 @@ mod tests {
 
         headers.insert(header::ORIGIN, "https://sub.example.com".parse().unwrap());
         assert!(!origin_matches_request_host(&headers));
+        headers.insert(header::ORIGIN, "https://example.com:8443".parse().unwrap());
+        assert!(!origin_matches_request_host(&headers));
+
+        headers.insert(header::HOST, "example.com:8443".parse().unwrap());
+        headers.insert(header::ORIGIN, "https://example.com".parse().unwrap());
+        assert!(!origin_matches_request_host(&headers));
+        headers.insert(header::ORIGIN, "https://example.com:8443".parse().unwrap());
+        assert!(origin_matches_request_host(&headers));
+    }
+
+    #[tokio::test]
+    async fn trailing_slash_redirects_percent_encode_path_segments() {
+        let response = redirect_channel_trailing_slash(Path((
+            "room name".to_string(),
+            "chat ? #".to_string(),
+        )))
+        .await
+        .into_response();
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/room%20name/chat%20%3F%20%23"
+        );
     }
 }

@@ -103,7 +103,13 @@
 
                         ws.onmessage = async (event) => {
                             if (wsConnectionId !== thisConnectionId) return; // stale connection
-                            const msg = JSON.parse(event.data);
+                            let msg;
+                            try {
+                                msg = JSON.parse(event.data);
+                            } catch (error) {
+                                console.warn('Ignoring malformed WebSocket message:', error);
+                                return;
+                            }
 
                             switch (msg.type) {
                                 case 'joined':
@@ -974,6 +980,9 @@
 
         function updateGridLayout(count) {
             remoteGrid.className = 'grid gap-2 md:gap-4 w-full h-full max-w-[1600px] transition-all duration-500 grid-expand my-auto';
+            // Clear layouts installed for the previous peer count; otherwise
+            // an inline auto-fit template overrides the new utility classes.
+            remoteGrid.style.gridTemplateColumns = '';
 
             if (count === 0) return;
 
@@ -1075,9 +1084,6 @@
             vid.autoplay = true;
             vid.playsInline = true;
             attachSinkId(vid, currentAudioOutputId);
-            vid.autoplay = true;
-            vid.playsInline = true;
-            attachSinkId(vid, currentAudioOutputId);
 
             const savedVol = getVolumeSettings(userId, 'main');
             vid.volume = savedVol;
@@ -1134,7 +1140,7 @@
             fsBtn.onclick = () => toggleFullscreen(userId);
             fsBtn.title = "Toggle Fullscreen";
 
-            fsBtn.addEventListener('fullscreenchange', () => {
+            const onFullscreenChange = () => {
                 if (document.fullscreenElement === container) {
                     fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3"/></svg>';
                     fsBtn.classList.add('bg-indigo-600');
@@ -1142,7 +1148,10 @@
                     fsBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
                     fsBtn.classList.remove('bg-indigo-600');
                 }
-            });
+            };
+            // fullscreenchange is dispatched on Document, not the button.
+            document.addEventListener('fullscreenchange', onFullscreenChange);
+            container._fullscreenChangeHandler = onFullscreenChange;
 
             container.dataset.userId = userId;
 
@@ -1524,7 +1533,11 @@
                 } else if (data.type === 'candidate') {
                     if (!pc.remoteDescription || !pc.remoteDescription.type) {
                         if (!pendingCandidates[userId]) pendingCandidates[userId] = [];
-                        pendingCandidates[userId].push(data.candidate);
+                        if (pendingCandidates[userId].length < MAX_PENDING_ICE_CANDIDATES) {
+                            pendingCandidates[userId].push(data.candidate);
+                        } else {
+                            console.warn('Dropping excessive buffered ICE candidate for', userId.substr(0, 4));
+                        }
                         return;
                     }
                     await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
@@ -1572,7 +1585,16 @@
             }
 
             const el = document.getElementById(`wrapper-${userId}`);
-            if (el) el.remove();
+            if (el) {
+                const intervalId = Number(el.dataset.interval);
+                if (Number.isFinite(intervalId) && intervalId > 0) {
+                    clearInterval(intervalId);
+                }
+                if (el._fullscreenChangeHandler) {
+                    document.removeEventListener('fullscreenchange', el._fullscreenChangeHandler);
+                }
+                el.remove();
+            }
 
             const screenAud = document.getElementById(`aud-screen-${userId}`);
             if (screenAud) {
@@ -1593,7 +1615,9 @@
         }
 
         function sendSignal(toId, data) {
-            ws.send(JSON.stringify({ type: 'signal', target: toId, data: data }));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'signal', target: toId, data: data }));
+            }
         }
 
         window.toggleFullscreen = function(userId) {

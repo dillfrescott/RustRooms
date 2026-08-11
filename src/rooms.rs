@@ -61,6 +61,9 @@ pub(crate) async fn handle_socket(
     // Server-side ping to detect dead iOS Safari connections
     let tx_ping = tx.clone();
     let (ping_shutdown_tx, mut ping_shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let (inactivity_tx, mut inactivity_rx) = tokio::sync::oneshot::channel::<()>();
+    let join_deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(JOIN_TIMEOUT_SECS);
     let last_activity = Arc::new(tokio::sync::Mutex::new(std::time::Instant::now()));
     let last_activity_writer = last_activity.clone();
 
@@ -90,6 +93,9 @@ pub(crate) async fn handle_socket(
                             code: 4001,
                             reason: "Inactivity timeout".into(),
                         }))));
+                        // Do not rely on a dead client replying to the close
+                        // frame: wake the reader so presence is removed now.
+                        let _ = inactivity_tx.send(());
                         break;
                     }
                     // Send server-side keepalive
@@ -99,8 +105,12 @@ pub(crate) async fn handle_socket(
                         target: None,
                         data: None,
                     }).unwrap();
-                    if tx_for_ping.try_send(Ok(Message::Text(ping_msg.into()))).is_err() {
-                        break;
+                    match tx_for_ping.try_send(Ok(Message::Text(ping_msg.into()))) {
+                        Ok(()) => {}
+                        // A temporary full queue must not permanently disable
+                        // inactivity detection; just skip this keepalive.
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => continue,
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
                     }
                 }
                 _ = &mut ping_shutdown_rx => {
@@ -110,7 +120,29 @@ pub(crate) async fn handle_socket(
         }
     });
 
-    while let Some(result) = user_ws_rx.next().await {
+    loop {
+        let next_message = if is_joined {
+            tokio::select! {
+                message = user_ws_rx.next() => message,
+                _ = &mut inactivity_rx => None,
+            }
+        } else {
+            tokio::select! {
+                message = user_ws_rx.next() => message,
+                _ = &mut inactivity_rx => None,
+                _ = tokio::time::sleep_until(join_deadline) => {
+                    let _ = tx.try_send(Ok(Message::Close(Some(CloseFrame {
+                        code: 4000,
+                        reason: "Join timeout".into(),
+                    }))));
+                    None
+                }
+            }
+        };
+        let Some(result) = next_message else {
+            break;
+        };
+
         // Update last activity timestamp on any received message
         *last_activity_writer.lock().await = std::time::Instant::now();
         if let Ok(msg) = result {
@@ -278,6 +310,8 @@ pub(crate) async fn handle_socket(
 
                             if avatar.is_none() {
                                 is_gif = false;
+                                static_frame = None;
+                            } else if !is_gif {
                                 static_frame = None;
                             }
 
@@ -625,6 +659,10 @@ pub(crate) async fn handle_socket(
                                                         && a_str.len() <= MAX_AVATAR_DATA_LEN
                                                     {
                                                         status.avatar = Some(a_str.to_string());
+                                                        // A frame belongs to a specific GIF.
+                                                        // Do not retain one from the old avatar
+                                                        // unless this update supplies a new one.
+                                                        status.static_frame = None;
                                                     }
                                                 }
                                                 if let Some(g) =
@@ -672,6 +710,8 @@ pub(crate) async fn handle_socket(
                                                 }
                                                 if status.avatar.is_none() {
                                                     status.is_gif = false;
+                                                    status.static_frame = None;
+                                                } else if !status.is_gif {
                                                     status.static_frame = None;
                                                 }
                                             }
@@ -1584,6 +1624,9 @@ pub(crate) async fn channel_status(
         .and_then(|t| t.get(&channel_id))
         .copied()
         .unwrap_or(0);
+    drop(times_lock);
+    drop(remote_lock);
+    drop(rooms_lock);
 
     axum::Json(RoomStatus {
         name: channel_id,

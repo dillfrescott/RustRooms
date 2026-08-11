@@ -74,7 +74,7 @@ pub(crate) fn is_valid_distributed_message(msg: &DistributedMessage) -> bool {
             .as_ref()
             .and_then(|data| data.get("createdAt"))
             .and_then(serde_json::Value::as_u64)
-            .is_some(),
+            .is_some_and(|created_at| created_at > 0),
         "rename-channel" => msg
             .data
             .as_ref()
@@ -424,6 +424,7 @@ async fn apply_distributed_message(
                 .as_ref()
                 .and_then(|data| data.get("createdAt"))
                 .and_then(serde_json::Value::as_u64)
+                .filter(|created_at| *created_at > 0)
                 .unwrap_or_else(current_unix_secs);
             let mut times = state.channel_creation_times.lock().await;
             let stored = times
@@ -452,6 +453,7 @@ async fn apply_distributed_message(
                 // never store a nickname the owner's own client doesn't show.
                 let mut status = status.clone();
                 status.nickname = normalize_nickname(&status.nickname);
+                normalize_profile_images(&mut status);
                 state
                     .room_cleanup_generations
                     .lock()
@@ -472,6 +474,7 @@ async fn apply_distributed_message(
                         .as_ref()
                         .and_then(|data| data.get("createdAt"))
                         .and_then(serde_json::Value::as_u64)
+                        .filter(|created_at| *created_at > 0)
                         .unwrap_or_else(current_unix_secs);
                     let mut times = state.channel_creation_times.lock().await;
                     let stored = times
@@ -613,6 +616,7 @@ async fn apply_distributed_message(
             if let Some(ref status) = msg.status {
                 let mut status = status.clone();
                 status.nickname = normalize_nickname(&status.nickname);
+                normalize_profile_images(&mut status);
                 {
                     let mut rl = remote_users.lock().await;
                     if let Some(room) = rl.get_mut(&msg.room_id)
@@ -884,6 +888,15 @@ pub(crate) async fn broadcast_channel_upsert(state: &AppState, room_id: &str, ch
     .await;
 }
 
+fn normalize_profile_images(status: &mut UserStatus) {
+    if status.avatar.is_none() {
+        status.is_gif = false;
+        status.static_frame = None;
+    } else if !status.is_gif {
+        status.static_frame = None;
+    }
+}
+
 // Sidebar presence list. Avatars are excluded: they're delivered once via
 // existing-users / user-joined / identify, and re-serializing multi-MB
 // data URLs here on every event would amplify into a DoS.
@@ -1044,6 +1057,23 @@ mod tests {
         assert!(!is_valid_distributed_message(&test_distributed_message(
             status
         )));
+    }
+
+    #[test]
+    fn channel_upserts_require_a_real_creation_timestamp() {
+        let mut message = DistributedMessage {
+            msg_type: "channel-upsert".to_string(),
+            room_id: "room".to_string(),
+            channel_id: "General".to_string(),
+            user_id: Uuid::new_v4().to_string(),
+            msg_id: Uuid::new_v4().to_string(),
+            status: None,
+            data: Some(serde_json::json!({ "createdAt": 0 })),
+            signal_msg: None,
+        };
+        assert!(!is_valid_distributed_message(&message));
+        message.data = Some(serde_json::json!({ "createdAt": 1 }));
+        assert!(is_valid_distributed_message(&message));
     }
 
     #[test]

@@ -6,9 +6,6 @@
         let newAvatarCandidate = null;
         let newAvatarCandidateIsGif = false;
         let newAvatarCandidateStaticFrame = null;
-        let settingsInitialAudioId = '';
-        let settingsInitialVideoId = '';
-        let settingsInitialAudioOutputId = '';
         let settingsNicknameDebounce = null;
 
         function handleSettingsNicknameInput() {
@@ -71,12 +68,6 @@
             }
 
             await populateSettingsDeviceList();
-            const settingsAudio = document.getElementById('settingsAudioSource');
-            const settingsVideo = document.getElementById('settingsVideoSource');
-            const settingsAudioOutput = document.getElementById('settingsAudioOutputSource');
-            settingsInitialAudioId = settingsAudio ? settingsAudio.value : '';
-            settingsInitialVideoId = settingsVideo ? settingsVideo.value : '';
-            settingsInitialAudioOutputId = settingsAudioOutput ? settingsAudioOutput.value : '';
             settingsOverlay.classList.remove('hidden');
             initSetupButtonTouchHandlers();
             if (localStream) {

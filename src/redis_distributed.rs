@@ -23,6 +23,9 @@ const MAX_REDIS_CHUNKS: usize = MAX_REDIS_FRAME_SIZE.div_ceil(REDIS_CHUNK_SIZE);
 const RECONNECT_MAX_SECS: u64 = 30;
 const CHUNK_TTL_SECS: u64 = 60;
 const MAX_PENDING_CHUNK_ASSEMBLIES: usize = 256;
+// Incomplete transmissions are controlled by Redis publishers, so limiting
+// only their count would still permit several gigabytes of buffered chunks.
+const MAX_PENDING_CHUNK_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PENDING_SNAPSHOTS: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +197,11 @@ async fn run_session(
     let mut pubsub = client.get_async_pubsub().await?;
     pubsub.subscribe(channel).await?;
     let mut publisher = client.get_multiplexed_async_connection().await?;
+
+    // Events queued while this endpoint was disconnected are stale relative
+    // to the authoritative snapshot below (a queued join after a later leave
+    // can otherwise resurrect a ghost). Start at the live tail instead.
+    *distributed_rx = state.distributed_tx.subscribe();
 
     println!("REDIS DISTRIBUTED [{label}]: Connected and subscribed to {channel}");
     *retry_secs = 1;
@@ -597,6 +605,39 @@ async fn accept_chunk(raw: &str, assemblies: &Arc<Mutex<Assemblies>>) -> Option<
     {
         pending.remove(&oldest);
     }
+    if pending
+        .get(&key)
+        .is_some_and(|assembly| assembly.total != chunk.total)
+    {
+        pending.remove(&key);
+        return None;
+    }
+
+    let is_new_part = pending
+        .get(&key)
+        .is_none_or(|assembly| assembly.parts[chunk.index].is_none());
+    if is_new_part {
+        while pending
+            .values()
+            .fold(0usize, |total, assembly| {
+                total.saturating_add(assembly.bytes)
+            })
+            .saturating_add(chunk.payload.len())
+            > MAX_PENDING_CHUNK_BYTES
+        {
+            let oldest = pending
+                .iter()
+                .filter(|(candidate, _)| *candidate != &key)
+                .min_by_key(|(_, assembly)| assembly.last_activity)
+                .map(|(candidate, _)| candidate.clone());
+            let Some(oldest) = oldest else {
+                pending.remove(&key);
+                return None;
+            };
+            pending.remove(&oldest);
+        }
+    }
+
     let assembly = pending.entry(key.clone()).or_insert_with(|| ChunkAssembly {
         last_activity: Instant::now(),
         total: chunk.total,
@@ -604,11 +645,7 @@ async fn accept_chunk(raw: &str, assemblies: &Arc<Mutex<Assemblies>>) -> Option<
         parts: (0..chunk.total).map(|_| None).collect(),
     });
     assembly.last_activity = Instant::now();
-    if assembly.total != chunk.total {
-        pending.remove(&key);
-        return None;
-    }
-    if assembly.parts[chunk.index].is_none() {
+    if is_new_part {
         assembly.bytes += chunk.payload.len();
         if assembly.bytes > MAX_REDIS_FRAME_SIZE {
             pending.remove(&key);
@@ -722,18 +759,20 @@ async fn publish_local_snapshot(
 fn local_snapshot_stream(state: AppState) -> tokio::sync::mpsc::Receiver<DistributedMessage> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
-        let times = state.channel_creation_times.lock().await.clone();
-        // Clone the local view once and release the mutex before waiting on
-        // Redis. Holding the room lock while streaming a multi-megabyte
-        // snapshot can otherwise freeze joins, leaves, and signaling.
+        // Clone rooms before metadata. A join creates its channel while holding
+        // the room lock and then records its timestamp, so this order ensures
+        // every room in the snapshot also has its completed metadata update.
+        // Both locks are released before any Redis I/O.
         let rooms = state.rooms.lock().await.clone();
+        let times = state.channel_creation_times.lock().await.clone();
         for (room_id, room) in &rooms {
             for (channel_id, channel) in room {
                 let created_at = times
                     .get(room_id)
                     .and_then(|channels| channels.get(channel_id))
                     .copied()
-                    .unwrap_or(0);
+                    .filter(|created_at| *created_at > 0)
+                    .unwrap_or_else(current_unix_secs);
                 let channel_message = DistributedMessage {
                     msg_type: "channel-upsert".into(),
                     room_id: room_id.clone(),

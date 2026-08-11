@@ -82,6 +82,7 @@ pub(crate) const MAX_BYTES_PER_RATE_WINDOW: usize = 16 * 1024 * 1024;
 // Sized to fit a maximum-size avatar plus static frame.
 pub(crate) const MAX_DISTRIBUTED_DATA_LEN: usize = 3 * 1024 * 1024;
 pub(crate) const PROFILE_IMAGE_UPDATE_COOLDOWN_SECS: u64 = 5;
+pub(crate) const JOIN_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DistributedMessage {
@@ -117,6 +118,7 @@ pub(crate) struct AppState {
 pub(crate) fn normalize_channel_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty()
+        || matches!(trimmed, "." | "..")
         || trimmed.chars().count() > MAX_CHANNEL_ID_LEN
         || trimmed.chars().any(char::is_control)
         || trimmed.contains(['/', '\\'])
@@ -133,6 +135,7 @@ pub(crate) fn normalize_channel_id(value: &str) -> Option<String> {
 
 pub(crate) fn is_valid_room_id(value: &str) -> bool {
     !value.is_empty()
+        && !matches!(value, "." | "..")
         && value.chars().count() <= MAX_ROOM_ID_LEN
         && !value.chars().any(char::is_control)
         && !value.contains(['/', '\\'])
@@ -238,7 +241,15 @@ mod tests {
         assert!(normalize_channel_id("   ").is_none());
         assert!(normalize_channel_id("line\nbreak").is_none());
         assert!(normalize_channel_id("path/segment").is_none());
+        assert!(normalize_channel_id(".").is_none());
+        assert!(normalize_channel_id("..").is_none());
         assert!(normalize_channel_id(&"a".repeat(MAX_CHANNEL_ID_LEN + 1)).is_none());
+    }
+
+    #[test]
+    fn dot_segment_room_ids_are_rejected() {
+        assert!(!is_valid_room_id("."));
+        assert!(!is_valid_room_id(".."));
     }
 
     #[test]

@@ -507,7 +507,6 @@
 
         let userClickTracker = {};
         let pendingKickUserId = null;
-        let pendingKickUserNickname = null;
 
         function handleUserClick(el) {
             const userId = el.dataset.userId;
@@ -718,7 +717,6 @@
             const submitBtn = document.getElementById('kickSubmit');
 
             pendingKickUserId = userId;
-            pendingKickUserNickname = nickname;
 
             title.textContent = 'Kick User';
             message.textContent = `Are you sure you want to kick "${nickname}" from the room?`;
@@ -739,7 +737,6 @@
         function closeKickModal() {
             document.getElementById('kickModal').classList.remove('open');
             pendingKickUserId = null;
-            pendingKickUserNickname = null;
         }
 
         let roomDragState = {
@@ -810,8 +807,8 @@
                     showCustomAlert("Name Too Long", "Channel names can be at most 32 characters.");
                     return;
                 }
-                if (/[\\/]/.test(name)) {
-                    showCustomAlert("Invalid Name", "Channel names cannot contain slashes.");
+                if (/[\\/]/.test(name) || name === '.' || name === '..') {
+                    showCustomAlert("Invalid Name", "Channel names cannot contain slashes or be a dot segment.");
                     return;
                 }
                 performChannelSwitch(roomId, name);
@@ -823,7 +820,13 @@
             if (newChannelId && newChannelId.toLowerCase() === 'general') {
                 newChannelId = 'General';
             }
-            if (newChannelId && newChannelId.length > 32) newChannelId = newChannelId.substring(0, 32);
+            if ([...newChannelId].length > 32) {
+                newChannelId = [...newChannelId].slice(0, 32).join('');
+            }
+            if (!newChannelId || newChannelId === '.' || newChannelId === '..') {
+                showCustomAlert("Invalid Name", "Please choose a valid channel name.");
+                return;
+            }
 
             if (ws) {
                 ws.onclose = null;
@@ -907,8 +910,8 @@
                     showCustomAlert("Name Too Long", "Channel names can be at most 32 characters.");
                     return;
                 }
-                if (/[\\/]/.test(newName)) {
-                    showCustomAlert("Invalid Name", "Channel names cannot contain slashes.");
+                if (/[\\/]/.test(newName) || newName === '.' || newName === '..') {
+                    showCustomAlert("Invalid Name", "Channel names cannot contain slashes or be a dot segment.");
                     return;
                 }
                 const normalizedNewName = newName.toLowerCase() === 'general' ? 'General' : newName;
