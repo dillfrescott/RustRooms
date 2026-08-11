@@ -185,6 +185,7 @@ mod tests {
             cluster_tx: tokio::sync::broadcast::channel(CLUSTER_BROADCAST_CAPACITY).0,
             remote_users: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             remote_user_sources: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            remote_user_paths: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             channel_creation_times: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             cluster_key: None,
             cluster_scheme: "ws".to_string(),

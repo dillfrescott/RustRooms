@@ -55,6 +55,10 @@ pub(crate) type RemoteUsersMap =
     Arc<Mutex<HashMap<String, HashMap<String, HashMap<String, UserStatus>>>>>;
 pub(crate) type RemoteUserSourcesMap =
     Arc<Mutex<HashMap<(String, String, String), HashSet<String>>>>;
+// The first known, loop-free route from the originating node to a remote
+// user. It is included in connection snapshots so relay nodes can replay
+// state without creating circular ownership/liveness references.
+pub(crate) type RemoteUserPathsMap = Arc<Mutex<HashMap<(String, String, String), Vec<String>>>>;
 pub(crate) type ChannelCreationTimesMap = Arc<Mutex<HashMap<String, HashMap<String, u64>>>>;
 pub(crate) const ROOM_EMPTY_GRACE_SECS: u64 = 120;
 pub(crate) const MAX_ROOM_ID_LEN: usize = 64;
@@ -69,7 +73,8 @@ pub(crate) const CLIENT_WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 // Cluster join messages contain the profile in both status and signaling data.
 pub(crate) const CLUSTER_WS_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 32;
-pub(crate) const CLUSTER_BROADCAST_CAPACITY: usize = 64;
+pub(crate) const CLUSTER_BROADCAST_CAPACITY: usize = 256;
+pub(crate) const CLUSTER_MAX_PATH_HOPS: usize = 32;
 // Cluster links send an app-level keepalive frame every CLUSTER_KEEPALIVE_SECS
 // and treat CLUSTER_PEER_TIMEOUT_SECS of total silence as a dead peer, so
 // hard-crashed nodes don't leave ghost users in remote_users indefinitely.
@@ -85,6 +90,10 @@ pub(crate) const MAX_BYTES_PER_RATE_WINDOW: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_RELAY_DATA_LEN: usize = 3 * 1024 * 1024;
 pub(crate) const PROFILE_IMAGE_UPDATE_COOLDOWN_SECS: u64 = 5;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ClusterMessage {
     #[serde(rename = "type")]
@@ -99,6 +108,15 @@ pub(crate) struct ClusterMessage {
     pub(crate) data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) signal_msg: Option<String>,
+    // Node IDs traversed by this event. Relays append themselves and reject
+    // messages which already contain their own ID, preventing forwarding
+    // loops and circular ghost-user references in arbitrary cluster graphs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) path: Vec<String>,
+    // Snapshot records initialize a newly connected peer but are not flooded
+    // again. Live events are flooded and deduplicated by msg_id.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) sync: bool,
 }
 
 #[derive(Clone)]
@@ -109,6 +127,7 @@ pub(crate) struct AppState {
     pub(crate) cluster_tx: tokio::sync::broadcast::Sender<String>,
     pub(crate) remote_users: RemoteUsersMap,
     pub(crate) remote_user_sources: RemoteUserSourcesMap,
+    pub(crate) remote_user_paths: RemoteUserPathsMap,
     pub(crate) channel_creation_times: ChannelCreationTimesMap,
     pub(crate) cluster_key: Option<String>,
     pub(crate) cluster_scheme: String,

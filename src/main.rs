@@ -5,7 +5,9 @@ mod state;
 mod web_assets;
 
 use axum::{Router, routing::get};
-use cluster::{cluster_ws_handler, spawn_dht_discovery};
+use cluster::{
+    cluster_ws_handler, parse_cluster_peer_urls, spawn_dht_discovery, spawn_static_peer_connections,
+};
 use rooms::channel_status;
 use routes::*;
 use state::*;
@@ -38,19 +40,42 @@ async fn main() {
     let allowed_url = std::env::var("URL")
         .ok()
         .and_then(|url| normalize_configured_host(&url));
+    let configured_peer_urls = ["CLUSTER_PEERS", "CLUSTER_RELAY_URL"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .flat_map(|raw| parse_cluster_peer_urls(&raw, &cluster_scheme))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let dht_enabled = std::env::var("CLUSTER_DHT")
+        .ok()
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
+        .unwrap_or(true);
     let (cluster_tx, _) = tokio::sync::broadcast::channel::<String>(CLUSTER_BROADCAST_CAPACITY);
     let remote_users: RemoteUsersMap = Arc::new(Mutex::new(HashMap::new()));
     let remote_user_sources: RemoteUserSourcesMap = Arc::new(Mutex::new(HashMap::new()));
+    let remote_user_paths: RemoteUserPathsMap = Arc::new(Mutex::new(HashMap::new()));
 
     if cluster_key.is_some() {
         println!(
-            "CLUSTER: Enabled via KEY env var (DHT discovery, scheme: {})",
+            "CLUSTER: Enabled via KEY env var ({} persistent peer(s), DHT: {}, default scheme: {})",
+            configured_peer_urls.len(),
+            if dht_enabled { "enabled" } else { "disabled" },
             cluster_scheme
         );
-        if cluster_scheme == "ws" {
-            eprintln!("WARNING: CLUSTER: Using unencrypted ws:// for inter-instance traffic.");
+        let has_unencrypted_links = configured_peer_urls
+            .iter()
+            .any(|url| url.starts_with("ws://"))
+            || (dht_enabled && cluster_scheme == "ws");
+        if has_unencrypted_links {
+            eprintln!("WARNING: CLUSTER: Using unencrypted ws:// for some inter-instance traffic.");
             eprintln!(
-                "WARNING: Set CLUSTER_SCHEME=wss and put a TLS-terminating proxy in front of cluster-ws if exposing over untrusted networks."
+                "WARNING: Use wss:// peer URLs (and CLUSTER_SCHEME=wss for DHT) over untrusted networks."
             );
         }
     }
@@ -71,6 +96,7 @@ async fn main() {
         cluster_tx,
         remote_users,
         remote_user_sources,
+        remote_user_paths,
         channel_creation_times,
         cluster_key,
         cluster_scheme,
@@ -140,7 +166,10 @@ async fn main() {
     println!("SERVER RUNNING ON PORT {}", port);
 
     if state.cluster_key.is_some() {
-        spawn_dht_discovery(state.clone(), port);
+        spawn_static_peer_connections(state.clone(), configured_peer_urls);
+        if dht_enabled {
+            spawn_dht_discovery(state.clone(), port);
+        }
     }
 
     axum::serve(listener, app).await.unwrap();

@@ -1,6 +1,7 @@
 use crate::{
     cluster::{
-        broadcast_channel_list, cluster_broadcast, remove_remote_user, schedule_empty_room_cleanup,
+        broadcast_channel_list, broadcast_channel_upsert, cluster_broadcast, remove_remote_user,
+        schedule_empty_room_cleanup,
     },
     routes::host_is_allowed,
     state::*,
@@ -44,8 +45,7 @@ pub(crate) async fn handle_socket(
     state: AppState,
 ) {
     let rooms = state.rooms.clone();
-    let remote_users = state.remote_users.clone(); // Added remote_users clone
-    let cluster_tx = state.cluster_tx.clone(); // Added cluster_tx clone
+    let remote_users = state.remote_users.clone();
     let room_cleanup_generations = state.room_cleanup_generations.clone();
     let (mut user_ws_tx, mut user_ws_rx) = socket.split();
     let (tx, mut rx) = tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
@@ -287,10 +287,14 @@ pub(crate) async fn handle_socket(
                             let joined_status;
                             {
                                 let room_needs_password = {
-                                    let exists_locally =
-                                        rooms.lock().await.contains_key(&room_id);
+                                    let exists_locally = rooms.lock().await.contains_key(&room_id);
                                     let exists_remotely =
-                                        remote_users.lock().await.contains_key(&room_id);
+                                        remote_users.lock().await.contains_key(&room_id)
+                                            || state
+                                                .channel_creation_times
+                                                .lock()
+                                                .await
+                                                .contains_key(&room_id);
                                     let provided_password = parsed
                                         .data
                                         .as_ref()
@@ -382,7 +386,8 @@ pub(crate) async fn handle_socket(
                                     client_status,
                                 );
 
-                                channel.insert(user_id.clone(), (tx.clone(), joined_status.clone()));
+                                channel
+                                    .insert(user_id.clone(), (tx.clone(), joined_status.clone()));
                             }
 
                             if room_cleanup_generations
@@ -478,6 +483,14 @@ pub(crate) async fn handle_socket(
                             // room-creation password must never be relayed to peers or cluster nodes.
                             // Uses the canonical stored status so a stale reconnect
                             // announces the server's copy, not the client's.
+                            let created_at = state
+                                .channel_creation_times
+                                .lock()
+                                .await
+                                .get(&room_id)
+                                .and_then(|channels| channels.get(&channel_id))
+                                .copied()
+                                .unwrap_or_else(current_unix_secs);
                             let notify_data = Some(serde_json::json!({
                                 "nickname": joined_status.nickname,
                                 "avatar": joined_status.avatar,
@@ -491,7 +504,9 @@ pub(crate) async fn handle_socket(
                                 "micTrackId": mic_track_id,
                                 "screenAudioTrackId": screen_audio_track_id,
                                 "isLowBandwidthMode": joined_status.is_low_bandwidth_mode,
-                                "isOnTheGoMode": joined_status.is_on_the_go_mode
+                                "isOnTheGoMode": joined_status.is_on_the_go_mode,
+                                "profileRev": joined_status.profile_rev,
+                                "createdAt": created_at
                             }));
 
                             let notify_msg = serde_json::to_string(&SignalMessage {
@@ -529,8 +544,12 @@ pub(crate) async fn handle_socket(
                                         }
                                     }
                                 }
+                                broadcast_channel_upsert(&state, &room_id, "General").await;
+                                if channel_id != "General" {
+                                    broadcast_channel_upsert(&state, &room_id, &channel_id).await;
+                                }
                                 cluster_broadcast(
-                                    &cluster_tx,
+                                    &state,
                                     &ClusterMessage {
                                         msg_type: "user-joined".into(),
                                         room_id: room_id.clone(),
@@ -540,8 +559,11 @@ pub(crate) async fn handle_socket(
                                         status: Some(joined_status.clone()),
                                         data: notify_data.clone(),
                                         signal_msg: None,
+                                        path: Vec::new(),
+                                        sync: false,
                                     },
-                                );
+                                )
+                                .await;
                                 broadcast_channel_list(
                                     &rooms,
                                     &remote_users,
@@ -654,8 +676,7 @@ pub(crate) async fn handle_socket(
                                                     status.static_frame = None;
                                                 }
                                             }
-                                            status.profile_rev =
-                                                data_rev.max(status.profile_rev);
+                                            status.profile_rev = data_rev.max(status.profile_rev);
                                         }
                                         // Only propagate when something actually changed,
                                         // so spammy same-value updates don't trigger a
@@ -689,7 +710,7 @@ pub(crate) async fn handle_socket(
 
                                     if let Some(ref status) = full_status {
                                         cluster_broadcast(
-                                            &cluster_tx,
+                                            &state,
                                             &ClusterMessage {
                                                 msg_type: "user-update".into(),
                                                 room_id: room_id.clone(),
@@ -699,8 +720,11 @@ pub(crate) async fn handle_socket(
                                                 status: Some(status.clone()),
                                                 data: None,
                                                 signal_msg: None,
+                                                path: Vec::new(),
+                                                sync: false,
                                             },
-                                        );
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -731,13 +755,14 @@ pub(crate) async fn handle_socket(
 
                                     for (uid, (tx, _)) in channel.iter() {
                                         if *uid != user_id {
-                                            let _ = tx
-                                                .try_send(Ok(Message::Text(notify_msg.clone().into())));
+                                            let _ = tx.try_send(Ok(Message::Text(
+                                                notify_msg.clone().into(),
+                                            )));
                                         }
                                     }
                                 }
                                 cluster_broadcast(
-                                    &cluster_tx,
+                                    &state,
                                     &ClusterMessage {
                                         msg_type: "cam-toggle".into(),
                                         room_id: room_id.clone(),
@@ -747,8 +772,11 @@ pub(crate) async fn handle_socket(
                                         status: None,
                                         data: parsed.data.clone(),
                                         signal_msg: None,
+                                        path: Vec::new(),
+                                        sync: false,
                                     },
-                                );
+                                )
+                                .await;
                             }
                         } else if parsed.msg_type == "screen-toggle" {
                             if text.len() <= MAX_RELAY_DATA_LEN {
@@ -767,14 +795,13 @@ pub(crate) async fn handle_socket(
                                             status.is_screen_sharing = enabled;
                                         }
 
-                                        let notify_msg =
-                                            serde_json::to_string(&SignalMessage {
-                                                msg_type: "screen-toggle".into(),
-                                                user_id: Some(user_id.clone()),
-                                                target: None,
-                                                data: parsed.data.clone(),
-                                            })
-                                            .unwrap();
+                                        let notify_msg = serde_json::to_string(&SignalMessage {
+                                            msg_type: "screen-toggle".into(),
+                                            user_id: Some(user_id.clone()),
+                                            target: None,
+                                            data: parsed.data.clone(),
+                                        })
+                                        .unwrap();
 
                                         for (uid, (tx, _)) in channel.iter() {
                                             if *uid != user_id {
@@ -787,7 +814,7 @@ pub(crate) async fn handle_socket(
                                 }
 
                                 cluster_broadcast(
-                                    &cluster_tx,
+                                    &state,
                                     &ClusterMessage {
                                         msg_type: "screen-toggle".into(),
                                         room_id: room_id.clone(),
@@ -797,8 +824,11 @@ pub(crate) async fn handle_socket(
                                         status: None,
                                         data: parsed.data.clone(),
                                         signal_msg: None,
+                                        path: Vec::new(),
+                                        sync: false,
                                     },
-                                );
+                                )
+                                .await;
                                 broadcast_channel_list(
                                     &rooms,
                                     &remote_users,
@@ -869,7 +899,12 @@ pub(crate) async fn handle_socket(
                                     // remote entry for the same id.
                                     {
                                         let mut rl = remote_users.lock().await;
-                                        remove_remote_user(&mut rl, &room_id, &channel_id, &kick_uid);
+                                        remove_remote_user(
+                                            &mut rl,
+                                            &room_id,
+                                            &channel_id,
+                                            &kick_uid,
+                                        );
                                     }
 
                                     if let Some(kicked_tx) = kicked_tx {
@@ -880,7 +915,7 @@ pub(crate) async fn handle_socket(
                                     }
 
                                     cluster_broadcast(
-                                        &cluster_tx,
+                                        &state,
                                         &ClusterMessage {
                                             msg_type: "user-kicked".into(),
                                             room_id: room_id.clone(),
@@ -890,8 +925,11 @@ pub(crate) async fn handle_socket(
                                             status: None,
                                             data: None,
                                             signal_msg: None,
+                                            path: Vec::new(),
+                                            sync: false,
                                         },
-                                    );
+                                    )
+                                    .await;
                                     broadcast_channel_list(
                                         &rooms,
                                         &remote_users,
@@ -922,7 +960,12 @@ pub(crate) async fn handle_socket(
                                         // propagates via user-left on disconnect.
                                         {
                                             let mut rl = remote_users.lock().await;
-                                            remove_remote_user(&mut rl, &room_id, &channel_id, &kick_uid);
+                                            remove_remote_user(
+                                                &mut rl,
+                                                &room_id,
+                                                &channel_id,
+                                                &kick_uid,
+                                            );
                                         }
                                         broadcast_channel_list(
                                             &rooms,
@@ -932,7 +975,7 @@ pub(crate) async fn handle_socket(
                                         )
                                         .await;
                                         cluster_broadcast(
-                                            &cluster_tx,
+                                            &state,
                                             &ClusterMessage {
                                                 msg_type: "user-kicked".into(),
                                                 room_id: room_id.clone(),
@@ -942,8 +985,11 @@ pub(crate) async fn handle_socket(
                                                 status: None,
                                                 data: None,
                                                 signal_msg: None,
+                                                path: Vec::new(),
+                                                sync: false,
                                             },
-                                        );
+                                        )
+                                        .await;
                                     }
                                 }
                             }
@@ -980,25 +1026,34 @@ pub(crate) async fn handle_socket(
                                         let rl = remote_users.lock().await;
                                         let remote_room = rl.get(&room_id);
                                         let room = rooms_lock.get(&room_id);
+                                        let times = state.channel_creation_times.lock().await;
+                                        let metadata_room = times.get(&room_id);
                                         let local_channel =
                                             room.and_then(|r| r.get(&target_channel_id));
                                         let remote_channel =
                                             remote_room.and_then(|r| r.get(&target_channel_id));
-                                        let exists_anywhere =
-                                            local_channel.is_some() || remote_channel.is_some();
-                                        let local_ok =
-                                            local_channel.is_none_or(HashMap::is_empty);
+                                        let exists_anywhere = local_channel.is_some()
+                                            || remote_channel.is_some()
+                                            || metadata_room.is_some_and(|channels| {
+                                                channels.contains_key(&target_channel_id)
+                                            });
+                                        let local_ok = local_channel.is_none_or(HashMap::is_empty);
                                         let remote_ok =
                                             remote_channel.is_none_or(HashMap::is_empty);
-                                        let local_collision = room
-                                            .is_some_and(|r| r.contains_key(&new_name_str));
+                                        let local_collision =
+                                            room.is_some_and(|r| r.contains_key(&new_name_str));
                                         let remote_collision = remote_room
                                             .is_some_and(|r| r.contains_key(&new_name_str));
+                                        let metadata_collision =
+                                            metadata_room.is_some_and(|channels| {
+                                                channels.contains_key(&new_name_str)
+                                            });
                                         exists_anywhere
                                             && local_ok
                                             && remote_ok
                                             && !local_collision
                                             && !remote_collision
+                                            && !metadata_collision
                                     };
 
                                     if can_rename {
@@ -1064,7 +1119,7 @@ pub(crate) async fn handle_socket(
                                         }
 
                                         cluster_broadcast(
-                                            &cluster_tx,
+                                            &state,
                                             &ClusterMessage {
                                                 msg_type: "rename-channel".into(),
                                                 room_id: room_id.clone(),
@@ -1076,8 +1131,10 @@ pub(crate) async fn handle_socket(
                                                     serde_json::json!({ "roomId": room_id, "oldName": target_channel_id, "newName": new_name_str }),
                                                 ),
                                                 signal_msg: None,
+                                                path: Vec::new(),
+                                                sync: false,
                                             },
-                                        );
+                                        ).await;
                                         broadcast_channel_list(
                                             &rooms,
                                             &remote_users,
@@ -1111,16 +1168,19 @@ pub(crate) async fn handle_socket(
                                     let rl = remote_users.lock().await;
                                     let remote_room = rl.get(&room_id);
                                     let room = rooms_lock.get(&room_id);
+                                    let times = state.channel_creation_times.lock().await;
+                                    let metadata_room = times.get(&room_id);
                                     let local_channel =
                                         room.and_then(|r| r.get(&target_channel_id));
                                     let remote_channel =
                                         remote_room.and_then(|r| r.get(&target_channel_id));
-                                    let exists_anywhere =
-                                        local_channel.is_some() || remote_channel.is_some();
-                                    let local_ok =
-                                        local_channel.is_none_or(HashMap::is_empty);
-                                    let remote_ok =
-                                        remote_channel.is_none_or(HashMap::is_empty);
+                                    let exists_anywhere = local_channel.is_some()
+                                        || remote_channel.is_some()
+                                        || metadata_room.is_some_and(|channels| {
+                                            channels.contains_key(&target_channel_id)
+                                        });
+                                    let local_ok = local_channel.is_none_or(HashMap::is_empty);
+                                    let remote_ok = remote_channel.is_none_or(HashMap::is_empty);
                                     exists_anywhere && local_ok && remote_ok
                                 };
 
@@ -1151,7 +1211,7 @@ pub(crate) async fn handle_socket(
                                     }
 
                                     cluster_broadcast(
-                                        &cluster_tx,
+                                        &state,
                                         &ClusterMessage {
                                             msg_type: "delete-channel".into(),
                                             room_id: room_id.clone(),
@@ -1161,8 +1221,11 @@ pub(crate) async fn handle_socket(
                                             status: None,
                                             data: None,
                                             signal_msg: None,
+                                            path: Vec::new(),
+                                            sync: false,
                                         },
-                                    );
+                                    )
+                                    .await;
                                     broadcast_channel_list(
                                         &rooms,
                                         &remote_users,
@@ -1206,7 +1269,7 @@ pub(crate) async fn handle_socket(
                                     let forwarded_text =
                                         serde_json::to_string(&forwarded_msg).unwrap();
                                     cluster_broadcast(
-                                        &cluster_tx,
+                                        &state,
                                         &ClusterMessage {
                                             msg_type: "signal".into(),
                                             room_id: room_id.clone(),
@@ -1216,8 +1279,11 @@ pub(crate) async fn handle_socket(
                                             status: None,
                                             data: None,
                                             signal_msg: Some(forwarded_text),
+                                            path: Vec::new(),
+                                            sync: false,
                                         },
-                                    );
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -1311,7 +1377,7 @@ pub(crate) async fn handle_socket(
 
     if is_joined && actually_removed {
         cluster_broadcast(
-            &state.cluster_tx,
+            &state,
             &ClusterMessage {
                 msg_type: "user-left".into(),
                 room_id: room_id.clone(),
@@ -1321,8 +1387,11 @@ pub(crate) async fn handle_socket(
                 status: None,
                 data: None,
                 signal_msg: None,
+                path: Vec::new(),
+                sync: false,
             },
-        );
+        )
+        .await;
     }
 
     if schedule_room_cleanup {
@@ -1524,26 +1593,66 @@ mod tests {
     #[test]
     fn no_configured_password_never_blocks_room_creation() {
         assert!(!room_creation_needs_password(None, false, false, None));
-        assert!(!room_creation_needs_password(None, false, false, Some("anything")));
+        assert!(!room_creation_needs_password(
+            None,
+            false,
+            false,
+            Some("anything")
+        ));
         assert!(!room_creation_needs_password(None, true, false, None));
     }
 
     #[test]
     fn new_room_requires_matching_password() {
-        assert!(room_creation_needs_password(Some("hunter2"), false, false, None));
-        assert!(room_creation_needs_password(Some("hunter2"), false, false, Some("wrong")));
-        assert!(!room_creation_needs_password(Some("hunter2"), false, false, Some("hunter2")));
+        assert!(room_creation_needs_password(
+            Some("hunter2"),
+            false,
+            false,
+            None
+        ));
+        assert!(room_creation_needs_password(
+            Some("hunter2"),
+            false,
+            false,
+            Some("wrong")
+        ));
+        assert!(!room_creation_needs_password(
+            Some("hunter2"),
+            false,
+            false,
+            Some("hunter2")
+        ));
     }
 
     #[test]
     fn existing_local_room_skips_password_requirement() {
-        assert!(!room_creation_needs_password(Some("hunter2"), true, false, None));
-        assert!(!room_creation_needs_password(Some("hunter2"), true, false, Some("wrong")));
+        assert!(!room_creation_needs_password(
+            Some("hunter2"),
+            true,
+            false,
+            None
+        ));
+        assert!(!room_creation_needs_password(
+            Some("hunter2"),
+            true,
+            false,
+            Some("wrong")
+        ));
     }
 
     #[test]
     fn existing_remote_room_skips_password_requirement() {
-        assert!(!room_creation_needs_password(Some("hunter2"), false, true, None));
-        assert!(!room_creation_needs_password(Some("hunter2"), true, true, Some("wrong")));
+        assert!(!room_creation_needs_password(
+            Some("hunter2"),
+            false,
+            true,
+            None
+        ));
+        assert!(!room_creation_needs_password(
+            Some("hunter2"),
+            true,
+            true,
+            Some("wrong")
+        ));
     }
 }

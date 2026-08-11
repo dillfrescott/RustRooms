@@ -13,10 +13,165 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::Mutex;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, protocol::Message as WsMessage},
+};
 use uuid::Uuid;
 
 type PeerUsers = Arc<Mutex<HashSet<(String, String, String)>>>;
+type UserKey = (String, String, String);
+
+fn cluster_user_data(status: &UserStatus, created_at: u64) -> serde_json::Value {
+    serde_json::json!({
+        "nickname": status.nickname,
+        "avatar": status.avatar,
+        "isGif": status.is_gif,
+        "staticFrame": status.static_frame,
+        "isMuted": status.is_muted,
+        "isDeafened": status.is_deafened,
+        "screenEnabled": status.is_screen_sharing,
+        "isLowBandwidthMode": status.is_low_bandwidth_mode,
+        "isOnTheGoMode": status.is_on_the_go_mode,
+        "profileRev": status.profile_rev,
+        "createdAt": created_at,
+    })
+}
+
+// Includes empty channels and transitively reachable users. Snapshot records
+// initialize one link but are not flooded again; their retained path prevents
+// a relay from reflecting state back toward its source. A bounded stream avoids
+// materializing every avatar a second time during a large cluster sync.
+fn cluster_snapshot_stream(state: AppState) -> tokio::sync::mpsc::Receiver<String> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        let times = state.channel_creation_times.lock().await.clone();
+        let paths = state.remote_user_paths.lock().await.clone();
+
+        for (room_id, channels) in &times {
+            for (channel_id, created_at) in channels {
+                let message = ClusterMessage {
+                    msg_type: "channel-upsert".into(),
+                    room_id: room_id.clone(),
+                    channel_id: channel_id.clone(),
+                    user_id: state.node_id.clone(),
+                    msg_id: Uuid::new_v4().to_string(),
+                    status: None,
+                    data: Some(serde_json::json!({ "createdAt": created_at })),
+                    signal_msg: None,
+                    path: vec![state.node_id.clone()],
+                    sync: true,
+                };
+                if let Ok(json) = serde_json::to_string(&message)
+                    && tx.send(json).await.is_err()
+                {
+                    return;
+                }
+            }
+        }
+
+        let mut seen: HashSet<UserKey> = HashSet::new();
+        {
+            let local = state.rooms.lock().await;
+            for (room_id, room) in local.iter() {
+                for (channel_id, channel) in room {
+                    let created_at = times
+                        .get(room_id)
+                        .and_then(|channels| channels.get(channel_id))
+                        .copied()
+                        .unwrap_or(0);
+                    for (user_id, (_, status)) in channel {
+                        let key = (room_id.clone(), channel_id.clone(), user_id.clone());
+                        seen.insert(key);
+                        let message = ClusterMessage {
+                            msg_type: "user-joined".into(),
+                            room_id: room_id.clone(),
+                            channel_id: channel_id.clone(),
+                            user_id: user_id.clone(),
+                            msg_id: Uuid::new_v4().to_string(),
+                            status: Some(status.clone()),
+                            data: Some(cluster_user_data(status, created_at)),
+                            signal_msg: None,
+                            path: vec![state.node_id.clone()],
+                            sync: true,
+                        };
+                        if let Ok(json) = serde_json::to_string(&message)
+                            && tx.send(json).await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        let remote = state.remote_users.lock().await;
+        for (room_id, room) in remote.iter() {
+            for (channel_id, channel) in room {
+                let created_at = times
+                    .get(room_id)
+                    .and_then(|channels| channels.get(channel_id))
+                    .copied()
+                    .unwrap_or(0);
+                for (user_id, status) in channel {
+                    let key = (room_id.clone(), channel_id.clone(), user_id.clone());
+                    if !seen.insert(key.clone()) {
+                        continue;
+                    }
+                    let mut path = paths.get(&key).cloned().unwrap_or_default();
+                    if path.last() != Some(&state.node_id) {
+                        path.push(state.node_id.clone());
+                    }
+                    let message = ClusterMessage {
+                        msg_type: "user-joined".into(),
+                        room_id: room_id.clone(),
+                        channel_id: channel_id.clone(),
+                        user_id: user_id.clone(),
+                        msg_id: Uuid::new_v4().to_string(),
+                        status: Some(status.clone()),
+                        data: Some(cluster_user_data(status, created_at)),
+                        signal_msg: None,
+                        path,
+                        sync: true,
+                    };
+                    if let Ok(json) = serde_json::to_string(&message)
+                        && tx.send(json).await.is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    rx
+}
+
+async fn process_cluster_message(
+    message: ClusterMessage,
+    peer_users: &PeerUsers,
+    source_id: &str,
+    state: &AppState,
+) {
+    if message.msg_type == "keepalive" {
+        return;
+    }
+    if !is_valid_cluster_message(&message) || message.path.iter().any(|id| id == &state.node_id) {
+        return;
+    }
+
+    track_peer_message(&message, peer_users, &state.remote_user_sources, source_id).await;
+    let is_new = handle_cluster_message(&message, &state.rooms, &state.remote_users, state).await;
+
+    // Flooding turns any publicly reachable RustRooms node into a relay, so
+    // private nodes only need outbound access and never need direct IP reachability.
+    if is_new && !message.sync {
+        let mut forwarded = message;
+        forwarded.path.push(state.node_id.clone());
+        if let Ok(json) = serde_json::to_string(&forwarded) {
+            let _ = state.cluster_tx.send(json);
+        }
+    }
+}
 
 pub(crate) async fn cluster_ws_handler(
     ws: WebSocketUpgrade,
@@ -40,19 +195,28 @@ pub(crate) async fn cluster_ws_handler(
     } else {
         return (axum::http::StatusCode::FORBIDDEN, "Clustering not enabled").into_response();
     }
-    if !peer_node_id.is_empty() && peer_node_id == state.node_id {
+    if Uuid::parse_str(&peer_node_id).is_err() {
+        return (axum::http::StatusCode::BAD_REQUEST, "Invalid node ID").into_response();
+    }
+    if peer_node_id == state.node_id {
         return (axum::http::StatusCode::BAD_REQUEST, "Self connection").into_response();
     }
-    ws.max_frame_size(CLUSTER_WS_MAX_MESSAGE_SIZE)
+    let own_node_id = state.node_id.clone();
+    let mut response = ws
+        .max_frame_size(CLUSTER_WS_MAX_MESSAGE_SIZE)
         .max_message_size(CLUSTER_WS_MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| handle_inbound_cluster(socket, state))
+        .on_upgrade(move |socket| handle_inbound_cluster(socket, state));
+    response.headers_mut().insert(
+        "X-Node-Id",
+        axum::http::HeaderValue::from_str(&own_node_id).unwrap(),
+    );
+    response
 }
 
 async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
     let source_id = Uuid::new_v4().to_string();
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let (write_tx, mut write_rx) =
-        tokio::sync::mpsc::channel::<Message>(OUTBOUND_QUEUE_CAPACITY);
+    let (write_tx, mut write_rx) = tokio::sync::mpsc::channel::<Message>(OUTBOUND_QUEUE_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = write_rx.recv().await {
@@ -68,9 +232,8 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
     // a dead link and tears the connection down.
     let keepalive_tx = write_tx.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-            CLUSTER_KEEPALIVE_SECS,
-        ));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(CLUSTER_KEEPALIVE_SECS));
         interval.tick().await; // skip first immediate tick
         loop {
             interval.tick().await;
@@ -83,6 +246,8 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
                 status: None,
                 data: None,
                 signal_msg: None,
+                path: Vec::new(),
+                sync: false,
             })
             .unwrap();
             if keepalive_tx.send(Message::Text(ka.into())).await.is_err() {
@@ -93,49 +258,22 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
 
     let mut cluster_rx = state.cluster_tx.subscribe();
 
-    {
-        let rooms_lock = state.rooms.lock().await;
-        for (room_id, room) in rooms_lock.iter() {
-            for (channel_id, channel) in room.iter() {
-                for (user_id, (_, status)) in channel.iter() {
-                    let cm = ClusterMessage {
-                        msg_type: "user-joined".into(),
-                        room_id: room_id.clone(),
-                        channel_id: channel_id.clone(),
-                        user_id: user_id.clone(),
-                        msg_id: Uuid::new_v4().to_string(),
-                        status: Some(status.clone()),
-                        data: Some(serde_json::json!({
-                            "nickname": status.nickname,
-                            "avatar": status.avatar,
-                            "isGif": status.is_gif,
-                            "staticFrame": status.static_frame,
-                            "isMuted": status.is_muted,
-                            "isDeafened": status.is_deafened,
-                            "screenEnabled": status.is_screen_sharing,
-                            "isLowBandwidthMode": status.is_low_bandwidth_mode,
-                            "isOnTheGoMode": status.is_on_the_go_mode
-                        })),
-                        signal_msg: None,
-                    };
-                    if let Ok(json) = serde_json::to_string(&cm) {
-                        let _ = write_tx.send(Message::Text(json.into())).await;
-                    }
-                }
+    let snapshot_tx = write_tx.clone();
+    let mut snapshot = cluster_snapshot_stream(state.clone());
+    let snapshotter = tokio::spawn(async move {
+        while let Some(json) = snapshot.recv().await {
+            if snapshot_tx.send(Message::Text(json.into())).await.is_err() {
+                break;
             }
         }
-    }
+    });
 
     let write_tx_fwd = write_tx.clone();
     let forwarder = tokio::spawn(async move {
         loop {
             match cluster_rx.recv().await {
                 Ok(msg) => {
-                    if write_tx_fwd
-                        .send(Message::Text(msg.into()))
-                        .await
-                        .is_err()
-                    {
+                    if write_tx_fwd.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
                 }
@@ -151,8 +289,6 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
         }
     });
 
-    let rooms = state.rooms.clone();
-    let remote_users = state.remote_users.clone();
     let peer_users: PeerUsers = Arc::new(Mutex::new(HashSet::new()));
     let peer_users_cleanup = peer_users.clone();
 
@@ -169,17 +305,7 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
         match msg {
             Message::Text(text) => {
                 if let Ok(cm) = serde_json::from_str::<ClusterMessage>(&text) {
-                    if !is_valid_cluster_message(&cm) {
-                        continue;
-                    }
-                    track_peer_message(
-                        &cm,
-                        &peer_users,
-                        &state.remote_user_sources,
-                        &source_id,
-                    )
-                    .await;
-                    handle_cluster_message(&cm, &rooms, &remote_users, &state).await;
+                    process_cluster_message(cm, &peer_users, &source_id, &state).await;
                 }
             }
             Message::Close(_) => break,
@@ -187,19 +313,11 @@ async fn handle_inbound_cluster(socket: WebSocket, state: AppState) {
         }
     }
 
+    snapshotter.abort();
     forwarder.abort();
     writer.abort();
     let dead = peer_users_cleanup.lock().await.clone();
-    let affected_rooms = cleanup_dead_remote_users(
-        &dead,
-        &rooms,
-        &remote_users,
-        &state.remote_user_sources,
-        &source_id,
-        &state.channel_creation_times,
-        &state.cluster_tx,
-    )
-    .await;
+    let affected_rooms = cleanup_dead_remote_users(&dead, &state, &source_id).await;
     for room_id in affected_rooms {
         schedule_empty_room_cleanup(&state, &room_id).await;
     }
@@ -291,15 +409,11 @@ pub(crate) fn spawn_dht_discovery(state: AppState, port: u16) {
                         let mut failures = 0u32;
                         loop {
                             let target_addr = addr_str_clean.clone();
-                            let url =
-                                format!("{}://{}/cluster-ws", scheme, target_addr);
+                            let url = format!("{}://{}/cluster-ws", scheme, target_addr);
                             let mut first_failed = false;
                             match connect_to_peer(&url, &state_clone).await {
                                 Ok(_) => {
-                                    println!(
-                                        "CLUSTER: Connection to {} closed",
-                                        target_addr
-                                    );
+                                    println!("CLUSTER: Connection to {} closed", target_addr);
                                     failures = 0;
                                 }
                                 Err(e) => {
@@ -320,24 +434,16 @@ pub(crate) fn spawn_dht_discovery(state: AppState, port: u16) {
                                 && !target_addr.starts_with("127.0.0.1")
                                 && let Some(port_idx) = addr_str_clean.rfind(':')
                             {
-                                let fallback_addr = format!(
-                                    "127.0.0.1{}",
-                                    &addr_str_clean[port_idx..]
-                                );
+                                let fallback_addr =
+                                    format!("127.0.0.1{}", &addr_str_clean[port_idx..]);
                                 println!(
                                     "CLUSTER: NAT Loopback? Retrying with local fallback: {}",
                                     fallback_addr
                                 );
-                                let url = format!(
-                                    "{}://{}/cluster-ws",
-                                    scheme, fallback_addr
-                                );
+                                let url = format!("{}://{}/cluster-ws", scheme, fallback_addr);
                                 match connect_to_peer(&url, &state_clone).await {
                                     Ok(_) => {
-                                        println!(
-                                            "CLUSTER: Connection to {} closed",
-                                            fallback_addr
-                                        );
+                                        println!("CLUSTER: Connection to {} closed", fallback_addr);
                                         failures = 0;
                                     }
                                     Err(e) => {
@@ -374,6 +480,77 @@ pub(crate) fn spawn_dht_discovery(state: AppState, port: u16) {
     });
 }
 
+pub(crate) fn parse_cluster_peer_urls(raw: &str, default_scheme: &str) -> Vec<String> {
+    let mut urls = HashSet::new();
+    for value in raw
+        .split([',', ';', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let candidate = if value.contains("://") {
+            value.to_string()
+        } else {
+            format!("{default_scheme}://{value}")
+        };
+        let Ok(mut url) = url::Url::parse(&candidate) else {
+            eprintln!("CLUSTER: Ignoring invalid peer URL: {value}");
+            continue;
+        };
+        match url.scheme() {
+            "http" => {
+                let _ = url.set_scheme("ws");
+            }
+            "https" => {
+                let _ = url.set_scheme("wss");
+            }
+            "ws" | "wss" => {}
+            _ => {
+                eprintln!("CLUSTER: Ignoring unsupported peer URL: {value}");
+                continue;
+            }
+        }
+        if url.path().is_empty() || url.path() == "/" {
+            url.set_path("/cluster-ws");
+        }
+        url.set_fragment(None);
+        urls.insert(url.to_string());
+    }
+    let mut urls: Vec<_> = urls.into_iter().collect();
+    urls.sort();
+    urls
+}
+
+pub(crate) fn spawn_static_peer_connections(state: AppState, urls: Vec<String>) {
+    for url in urls {
+        let state = state.clone();
+        tokio::spawn(async move {
+            {
+                let mut peers = state.connected_peers.lock().await;
+                if !peers.insert(url.clone()) {
+                    return;
+                }
+            }
+            println!("CLUSTER: Persistent outbound peer configured: {url}");
+            let mut retry_secs = 1u64;
+            loop {
+                match connect_to_peer(&url, &state).await {
+                    Ok(()) => {
+                        eprintln!("CLUSTER: Peer {url} disconnected; reconnecting");
+                        retry_secs = 1;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "CLUSTER: Peer {url} unavailable: {error}; retrying in {retry_secs}s"
+                        );
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(retry_secs)).await;
+                retry_secs = (retry_secs * 2).min(30);
+            }
+        });
+    }
+}
+
 async fn connect_to_peer(
     url: &str,
     state: &AppState,
@@ -381,23 +558,31 @@ async fn connect_to_peer(
     let source_id = Uuid::new_v4().to_string();
     let cluster_key = state.cluster_key.as_ref().ok_or("No cluster key")?;
     let mut full_url = url::Url::parse(url)?;
-    full_url.set_query(None);
+    full_url.set_fragment(None);
 
-    // Authenticate via headers rather than query parameters so the key
-    // doesn't leak into proxy and access logs.
-    let request = axum::http::Request::builder()
-        .uri(full_url.as_str())
-        .header("X-Cluster-Key", cluster_key)
-        .header("X-Node-Id", &state.node_id)
-        .body(())
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+    // Start from tungstenite's request builder so all mandatory WebSocket
+    // upgrade headers are present, then add credentials outside the URL/logs.
+    let mut request = full_url.as_str().into_client_request()?;
+    request
+        .headers_mut()
+        .insert("X-Cluster-Key", cluster_key.parse()?);
+    request
+        .headers_mut()
+        .insert("X-Node-Id", state.node_id.parse()?);
 
-    let (ws_stream, _) = connect_async(request).await?;
+    let (ws_stream, response) = connect_async(request).await?;
+    if let Some(peer_id) = response
+        .headers()
+        .get("X-Node-Id")
+        .and_then(|value| value.to_str().ok())
+        && peer_id == state.node_id
+    {
+        return Err("Peer resolved to this node".into());
+    }
     println!("CLUSTER: Connected to peer {}", url);
 
     let (mut write, mut read) = ws_stream.split();
-    let (write_tx, mut write_rx) =
-        tokio::sync::mpsc::channel::<WsMessage>(OUTBOUND_QUEUE_CAPACITY);
+    let (write_tx, mut write_rx) = tokio::sync::mpsc::channel::<WsMessage>(OUTBOUND_QUEUE_CAPACITY);
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = write_rx.recv().await {
@@ -411,9 +596,8 @@ async fn connect_to_peer(
     // node dying without a clean close (e.g. hard crash or power loss).
     let keepalive_tx = write_tx.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-            CLUSTER_KEEPALIVE_SECS,
-        ));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(CLUSTER_KEEPALIVE_SECS));
         interval.tick().await; // skip first immediate tick
         loop {
             interval.tick().await;
@@ -426,6 +610,8 @@ async fn connect_to_peer(
                 status: None,
                 data: None,
                 signal_msg: None,
+                path: Vec::new(),
+                sync: false,
             })
             .unwrap();
             if keepalive_tx.send(WsMessage::Text(ka.into())).await.is_err() {
@@ -436,38 +622,19 @@ async fn connect_to_peer(
 
     let mut cluster_rx = state.cluster_tx.subscribe();
 
-    {
-        let rooms_lock = state.rooms.lock().await;
-        for (room_id, room) in rooms_lock.iter() {
-            for (channel_id, channel) in room.iter() {
-                for (user_id, (_, status)) in channel.iter() {
-                    let cm = ClusterMessage {
-                        msg_type: "user-joined".into(),
-                        room_id: room_id.clone(),
-                        channel_id: channel_id.clone(),
-                        user_id: user_id.clone(),
-                        msg_id: Uuid::new_v4().to_string(),
-                        status: Some(status.clone()),
-                        data: Some(serde_json::json!({
-                            "nickname": status.nickname,
-                            "avatar": status.avatar,
-                            "isGif": status.is_gif,
-                            "staticFrame": status.static_frame,
-                            "isMuted": status.is_muted,
-                            "isDeafened": status.is_deafened,
-                            "screenEnabled": status.is_screen_sharing,
-                            "isLowBandwidthMode": status.is_low_bandwidth_mode,
-                            "isOnTheGoMode": status.is_on_the_go_mode
-                        })),
-                        signal_msg: None,
-                    };
-                    if let Ok(json) = serde_json::to_string(&cm) {
-                        let _ = write_tx.send(WsMessage::Text(json.into())).await;
-                    }
-                }
+    let snapshot_tx = write_tx.clone();
+    let mut snapshot = cluster_snapshot_stream(state.clone());
+    let snapshotter = tokio::spawn(async move {
+        while let Some(json) = snapshot.recv().await {
+            if snapshot_tx
+                .send(WsMessage::Text(json.into()))
+                .await
+                .is_err()
+            {
+                break;
             }
         }
-    }
+    });
 
     let write_tx_fwd = write_tx.clone();
     let forwarder = tokio::spawn(async move {
@@ -493,8 +660,6 @@ async fn connect_to_peer(
         }
     });
 
-    let rooms = state.rooms.clone();
-    let remote_users = state.remote_users.clone();
     let peer_users: PeerUsers = Arc::new(Mutex::new(HashSet::new()));
     let peer_users_cleanup = peer_users.clone();
 
@@ -512,17 +677,7 @@ async fn connect_to_peer(
             WsMessage::Text(text) => {
                 let text_str: String = text.to_string();
                 if let Ok(cm) = serde_json::from_str::<ClusterMessage>(&text_str) {
-                    if !is_valid_cluster_message(&cm) {
-                        continue;
-                    }
-                    track_peer_message(
-                        &cm,
-                        &peer_users,
-                        &state.remote_user_sources,
-                        &source_id,
-                    )
-                    .await;
-                    handle_cluster_message(&cm, &rooms, &remote_users, state).await;
+                    process_cluster_message(cm, &peer_users, &source_id, state).await;
                 }
             }
             WsMessage::Close(_) => break,
@@ -530,19 +685,11 @@ async fn connect_to_peer(
         }
     }
 
+    snapshotter.abort();
     forwarder.abort();
     writer.abort();
     let dead = peer_users_cleanup.lock().await.clone();
-    let affected_rooms = cleanup_dead_remote_users(
-        &dead,
-        &rooms,
-        &remote_users,
-        &state.remote_user_sources,
-        &source_id,
-        &state.channel_creation_times,
-        &state.cluster_tx,
-    )
-    .await;
+    let affected_rooms = cleanup_dead_remote_users(&dead, state, &source_id).await;
     for room_id in affected_rooms {
         schedule_empty_room_cleanup(state, &room_id).await;
     }
@@ -550,21 +697,64 @@ async fn connect_to_peer(
 }
 
 fn is_valid_cluster_message(msg: &ClusterMessage) -> bool {
-    is_valid_room_id(&msg.room_id)
-        && normalize_channel_id(&msg.channel_id).as_deref() == Some(msg.channel_id.as_str())
-        && Uuid::parse_str(&msg.user_id).is_ok()
-        && Uuid::parse_str(&msg.msg_id).is_ok()
-        && msg.status.as_ref().is_none_or(|status| {
-            status.nickname.chars().count() <= MAX_NICKNAME_LEN
-                && status
-                    .avatar
-                    .as_ref()
-                    .is_none_or(|avatar| avatar.len() <= MAX_AVATAR_DATA_LEN)
-                && status
-                    .static_frame
-                    .as_ref()
-                    .is_none_or(|frame| frame.len() <= MAX_STATIC_FRAME_DATA_LEN)
-        })
+    if !is_valid_room_id(&msg.room_id)
+        || normalize_channel_id(&msg.channel_id).as_deref() != Some(msg.channel_id.as_str())
+        || Uuid::parse_str(&msg.user_id).is_err()
+        || Uuid::parse_str(&msg.msg_id).is_err()
+        || msg.path.len() > CLUSTER_MAX_PATH_HOPS
+        || msg.path.iter().any(|node| Uuid::parse_str(node).is_err())
+        || msg
+            .data
+            .as_ref()
+            .is_some_and(|data| data.to_string().len() > MAX_RELAY_DATA_LEN)
+        || msg
+            .signal_msg
+            .as_ref()
+            .is_some_and(|signal| signal.len() > MAX_RELAY_DATA_LEN)
+    {
+        return false;
+    }
+
+    let valid_status = msg.status.as_ref().is_none_or(|status| {
+        status.nickname.chars().count() <= MAX_NICKNAME_LEN
+            && status
+                .avatar
+                .as_ref()
+                .is_none_or(|avatar| avatar.len() <= MAX_AVATAR_DATA_LEN)
+            && status
+                .static_frame
+                .as_ref()
+                .is_none_or(|frame| frame.len() <= MAX_STATIC_FRAME_DATA_LEN)
+    });
+    if !valid_status {
+        return false;
+    }
+
+    match msg.msg_type.as_str() {
+        "user-joined" | "user-update" => msg.status.is_some(),
+        "user-left" | "user-kicked" | "user-unreachable" | "delete-channel" => true,
+        "channel-upsert" => msg
+            .data
+            .as_ref()
+            .and_then(|data| data.get("createdAt"))
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "rename-channel" => msg
+            .data
+            .as_ref()
+            .and_then(|data| data.get("newName"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(normalize_channel_id)
+            .is_some(),
+        "cam-toggle" | "screen-toggle" => msg.data.is_some(),
+        "signal" => msg.signal_msg.as_ref().is_some_and(|raw| {
+            serde_json::from_str::<SignalMessage>(raw)
+                .ok()
+                .and_then(|signal| signal.target)
+                .is_some_and(|target| Uuid::parse_str(&target).is_ok())
+        }),
+        _ => false,
+    }
 }
 
 async fn track_peer_message(
@@ -589,7 +779,7 @@ async fn track_peer_message(
                 .or_default()
                 .insert(source_id.to_string());
         }
-        "user-left" | "user-kicked" => {
+        "user-left" | "user-kicked" | "user-unreachable" => {
             peer_users.lock().await.remove(&key);
             let mut sources_lock = sources.lock().await;
             if let Some(source_ids) = sources_lock.get_mut(&key) {
@@ -653,23 +843,19 @@ async fn track_peer_message(
 
 async fn cleanup_dead_remote_users(
     dead: &HashSet<(String, String, String)>,
-    rooms: &RoomMap,
-    remote_users: &RemoteUsersMap,
-    sources: &RemoteUserSourcesMap,
+    state: &AppState,
     source_id: &str,
-    times: &ChannelCreationTimesMap,
-    _cluster_tx: &tokio::sync::broadcast::Sender<String>,
 ) -> HashSet<String> {
     let mut affected_rooms = HashSet::new();
     for (room_id, channel_id, user_id) in dead {
+        let key = (room_id.clone(), channel_id.clone(), user_id.clone());
         let should_remove = {
-            let key = (room_id.clone(), channel_id.clone(), user_id.clone());
-            let mut sources_lock = sources.lock().await;
-            match sources_lock.get_mut(&key) {
+            let mut sources = state.remote_user_sources.lock().await;
+            match sources.get_mut(&key) {
                 Some(source_ids) => {
                     source_ids.remove(source_id);
                     if source_ids.is_empty() {
-                        sources_lock.remove(&key);
+                        sources.remove(&key);
                         true
                     } else {
                         false
@@ -683,39 +869,63 @@ async fn cleanup_dead_remote_users(
         }
 
         let removed = {
-            let mut remote_lock = remote_users.lock().await;
-            remove_remote_user(&mut remote_lock, room_id, channel_id, user_id)
+            let mut remote = state.remote_users.lock().await;
+            remove_remote_user(&mut remote, room_id, channel_id, user_id)
         };
         if !removed {
             continue;
         }
-        {
-            let rooms_lock = rooms.lock().await;
-            if let Some(room) = rooms_lock.get(room_id)
-                && let Some(channel) = room.get(channel_id)
-            {
-                let notify = serde_json::to_string(&SignalMessage {
-                    msg_type: "user-left".into(),
-                    user_id: Some(user_id.clone()),
-                    target: None,
-                    data: None,
-                })
-                .unwrap();
-                for (_, (tx, _)) in channel.iter() {
-                    let _ = tx.try_send(Ok(Message::Text(notify.clone().into())));
-                }
+        state.remote_user_paths.lock().await.remove(&key);
+
+        let notify = serde_json::to_string(&SignalMessage {
+            msg_type: "user-left".into(),
+            user_id: Some(user_id.clone()),
+            target: None,
+            data: None,
+        })
+        .unwrap();
+        let rooms = state.rooms.lock().await;
+        if let Some(channel) = rooms.get(room_id).and_then(|room| room.get(channel_id)) {
+            for (tx, _) in channel.values() {
+                let _ = tx.try_send(Ok(Message::Text(notify.clone().into())));
             }
         }
+        drop(rooms);
+
+        // No owner-generated leave exists after a hard network failure. Relay
+        // this synthetic leave so downstream nodes cannot retain ghost users.
+        cluster_broadcast(
+            state,
+            &ClusterMessage {
+                msg_type: "user-unreachable".into(),
+                room_id: room_id.clone(),
+                channel_id: channel_id.clone(),
+                user_id: user_id.clone(),
+                msg_id: Uuid::new_v4().to_string(),
+                status: None,
+                data: None,
+                signal_msg: None,
+                path: Vec::new(),
+                sync: false,
+            },
+        )
+        .await;
         affected_rooms.insert(room_id.clone());
     }
+
     for room_id in &affected_rooms {
-        broadcast_channel_list(rooms, remote_users, times, room_id).await;
+        broadcast_channel_list(
+            &state.rooms,
+            &state.remote_users,
+            &state.channel_creation_times,
+            room_id,
+        )
+        .await;
     }
     affected_rooms
 }
 
 pub(crate) async fn schedule_empty_room_cleanup(state: &AppState, room_id: &str) {
-    let has_local_room = state.rooms.lock().await.contains_key(room_id);
     let has_remote_users = state
         .remote_users
         .lock()
@@ -723,20 +933,12 @@ pub(crate) async fn schedule_empty_room_cleanup(state: &AppState, room_id: &str)
         .get(room_id)
         .is_some_and(|room| room.values().any(|channel| !channel.is_empty()));
 
-    if !has_local_room {
-        if !has_remote_users {
-            state.channel_creation_times.lock().await.remove(room_id);
-            state.room_cleanup_generations.lock().await.remove(room_id);
-        }
-        return;
-    }
-
     let local_is_empty = state
         .rooms
         .lock()
         .await
         .get(room_id)
-        .is_some_and(|room| room.values().all(HashMap::is_empty));
+        .is_none_or(|room| room.values().all(HashMap::is_empty));
     if !local_is_empty || has_remote_users {
         return;
     }
@@ -777,7 +979,7 @@ pub(crate) async fn schedule_empty_room_cleanup(state: &AppState, room_id: &str)
             let mut rooms = state.rooms.lock().await;
             let is_empty = rooms
                 .get(&room_id)
-                .is_some_and(|room| room.values().all(HashMap::is_empty));
+                .is_none_or(|room| room.values().all(HashMap::is_empty));
             if is_empty {
                 rooms.remove(&room_id);
                 true
@@ -825,11 +1027,11 @@ async fn handle_cluster_message(
     rooms: &RoomMap,
     remote_users: &RemoteUsersMap,
     state: &AppState,
-) {
+) -> bool {
     {
         let mut ids = state.recent_cluster_msg_ids.lock().await;
         if ids.contains(&msg.msg_id) {
-            return;
+            return false;
         }
         ids.insert(msg.msg_id.clone());
 
@@ -843,6 +1045,29 @@ async fn handle_cluster_message(
     }
 
     match msg.msg_type.as_str() {
+        "channel-upsert" => {
+            let created_at = msg
+                .data
+                .as_ref()
+                .and_then(|data| data.get("createdAt"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_else(current_unix_secs);
+            let mut times = state.channel_creation_times.lock().await;
+            let stored = times
+                .entry(msg.room_id.clone())
+                .or_default()
+                .entry(msg.channel_id.clone())
+                .or_insert(created_at);
+            *stored = (*stored).min(created_at);
+            drop(times);
+            broadcast_channel_list(
+                rooms,
+                remote_users,
+                &state.channel_creation_times,
+                &msg.room_id,
+            )
+            .await;
+        }
         "user-joined" => {
             if let Some(ref status) = msg.status {
                 // Normalize at the ingest boundary so a remote instance can
@@ -863,13 +1088,30 @@ async fn handle_cluster_message(
                         .insert(msg.user_id.clone(), status.clone())
                         .is_none()
                 };
+                state
+                    .remote_user_paths
+                    .lock()
+                    .await
+                    .entry((
+                        msg.room_id.clone(),
+                        msg.channel_id.clone(),
+                        msg.user_id.clone(),
+                    ))
+                    .or_insert_with(|| msg.path.clone());
                 {
+                    let created_at = msg
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("createdAt"))
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or_else(current_unix_secs);
                     let mut times = state.channel_creation_times.lock().await;
-                    times
+                    let stored = times
                         .entry(msg.room_id.clone())
                         .or_default()
                         .entry(msg.channel_id.clone())
-                        .or_insert_with(current_unix_secs);
+                        .or_insert(created_at);
+                    *stored = (*stored).min(created_at);
                 }
                 if is_new_user {
                     let rooms_lock = rooms.lock().await;
@@ -897,11 +1139,35 @@ async fn handle_cluster_message(
                 .await;
             }
         }
-        "user-left" | "user-kicked" => {
+        "user-left" | "user-kicked" | "user-unreachable" => {
+            // A link-failure notice is route-specific. If another cluster link
+            // still advertises this user, retain the user and do not propagate
+            // the failure farther; that alternate route remains usable.
+            if msg.msg_type == "user-unreachable" {
+                let key = (
+                    msg.room_id.clone(),
+                    msg.channel_id.clone(),
+                    msg.user_id.clone(),
+                );
+                if state
+                    .remote_user_sources
+                    .lock()
+                    .await
+                    .get(&key)
+                    .is_some_and(|sources| !sources.is_empty())
+                {
+                    return false;
+                }
+            }
             let removed_remote = {
                 let mut rl = remote_users.lock().await;
                 remove_remote_user(&mut rl, &msg.room_id, &msg.channel_id, &msg.user_id)
             };
+            state.remote_user_paths.lock().await.remove(&(
+                msg.room_id.clone(),
+                msg.channel_id.clone(),
+                msg.user_id.clone(),
+            ));
 
             // A kick may target a user hosted on this node (cross-node kick):
             // remove them from the local channel and close their socket.
@@ -944,7 +1210,7 @@ async fn handle_cluster_message(
             };
 
             if !removed_remote && !removed_local {
-                return;
+                return true;
             }
             // When the victim was local, the removal block above already
             // notified the channel; only notify again for remote removals.
@@ -1086,7 +1352,7 @@ async fn handle_cluster_message(
                                     room.insert(new_name.clone(), ch);
                                 }
                             } else {
-                                return;
+                                return true;
                             }
                         }
                     }
@@ -1116,6 +1382,22 @@ async fn handle_cluster_message(
                         }
                     }
                     drop(rl);
+
+                    {
+                        let mut paths = state.remote_user_paths.lock().await;
+                        let moved: Vec<_> = paths
+                            .keys()
+                            .filter(|(room_id, channel_id, _)| {
+                                room_id == &msg.room_id && channel_id == &msg.channel_id
+                            })
+                            .cloned()
+                            .collect();
+                        for old_key in moved {
+                            if let Some(path) = paths.remove(&old_key) {
+                                paths.insert((old_key.0, new_name.clone(), old_key.2), path);
+                            }
+                        }
+                    }
 
                     {
                         let mut times = state.channel_creation_times.lock().await;
@@ -1160,7 +1442,7 @@ async fn handle_cluster_message(
                     if channel.is_empty() {
                         room.remove(&msg.channel_id);
                     } else {
-                        return;
+                        return true;
                     }
                 }
             }
@@ -1172,6 +1454,13 @@ async fn handle_cluster_message(
                 }
             }
             drop(rl);
+            state
+                .remote_user_paths
+                .lock()
+                .await
+                .retain(|(room_id, channel_id, _), _| {
+                    room_id != &msg.room_id || channel_id != &msg.channel_id
+                });
             {
                 let mut times = state.channel_creation_times.lock().await;
                 if let Some(room_times) = times.get_mut(&msg.room_id) {
@@ -1208,19 +1497,61 @@ async fn handle_cluster_message(
         }
         _ => {}
     }
+    true
 }
 
-pub(crate) fn cluster_broadcast(
-    cluster_tx: &tokio::sync::broadcast::Sender<String>,
-    msg: &ClusterMessage,
-) {
-    let mut msg_with_id = msg.clone();
-    if msg_with_id.msg_id.is_empty() {
-        msg_with_id.msg_id = Uuid::new_v4().to_string();
+pub(crate) async fn cluster_broadcast(state: &AppState, msg: &ClusterMessage) {
+    let mut message = msg.clone();
+    if message.msg_id.is_empty() {
+        message.msg_id = Uuid::new_v4().to_string();
     }
-    if let Ok(json) = serde_json::to_string(&msg_with_id) {
-        let _ = cluster_tx.send(json);
+    if message.path.is_empty() {
+        message.path.push(state.node_id.clone());
     }
+
+    // Mark locally originated events before publishing. In a relay graph they
+    // can legitimately return over another link and must not be applied here.
+    {
+        let mut ids = state.recent_cluster_msg_ids.lock().await;
+        ids.insert(message.msg_id.clone());
+        let mut history = state.cluster_msg_history.lock().await;
+        history.push_back(message.msg_id.clone());
+        if history.len() > 1000
+            && let Some(oldest) = history.pop_front()
+        {
+            ids.remove(&oldest);
+        }
+    }
+    if let Ok(json) = serde_json::to_string(&message) {
+        let _ = state.cluster_tx.send(json);
+    }
+}
+
+pub(crate) async fn broadcast_channel_upsert(state: &AppState, room_id: &str, channel_id: &str) {
+    let created_at = state
+        .channel_creation_times
+        .lock()
+        .await
+        .get(room_id)
+        .and_then(|channels| channels.get(channel_id))
+        .copied()
+        .unwrap_or_else(current_unix_secs);
+    cluster_broadcast(
+        state,
+        &ClusterMessage {
+            msg_type: "channel-upsert".into(),
+            room_id: room_id.to_string(),
+            channel_id: channel_id.to_string(),
+            user_id: state.node_id.clone(),
+            msg_id: Uuid::new_v4().to_string(),
+            status: None,
+            data: Some(serde_json::json!({ "createdAt": created_at })),
+            signal_msg: None,
+            path: Vec::new(),
+            sync: false,
+        },
+    )
+    .await;
 }
 
 // Sidebar presence list. Avatars are excluded: they're delivered once via
@@ -1254,11 +1585,24 @@ pub(crate) async fn broadcast_channel_list(
     let local_room = rooms_lock.get(room_id);
     let remote_room = remote_lock.get(room_id);
 
-    if local_room.is_none() && remote_room.is_none() {
+    let metadata_room = times_lock.get(room_id);
+    if local_room.is_none() && remote_room.is_none() && metadata_room.is_none() {
         return;
     }
 
     let mut channel_list: HashMap<String, RoomStatus> = HashMap::new();
+    if let Some(channels) = metadata_room {
+        for (cid, created_at) in channels {
+            channel_list.insert(
+                cid.clone(),
+                RoomStatus {
+                    name: cid.clone(),
+                    users: HashMap::new(),
+                    created_at: *created_at,
+                },
+            );
+        }
+    }
 
     if let Some(room) = local_room {
         for (cid, users) in room.iter() {
@@ -1333,6 +1677,8 @@ mod tests {
             status: Some(status),
             data: None,
             signal_msg: None,
+            path: Vec::new(),
+            sync: false,
         }
     }
 
@@ -1426,6 +1772,7 @@ mod tests {
             cluster_tx: tokio::sync::broadcast::channel(CLUSTER_BROADCAST_CAPACITY).0,
             remote_users: Arc::new(Mutex::new(HashMap::new())),
             remote_user_sources: Arc::new(Mutex::new(HashMap::new())),
+            remote_user_paths: Arc::new(Mutex::new(HashMap::new())),
             channel_creation_times: Arc::new(Mutex::new(HashMap::new())),
             cluster_key: None,
             cluster_scheme: "ws".to_string(),
@@ -1437,7 +1784,12 @@ mod tests {
         }
     }
 
-    fn test_cluster_message_typed(msg_type: &str, room: &str, channel: &str, user: &str) -> ClusterMessage {
+    fn test_cluster_message_typed(
+        msg_type: &str,
+        room: &str,
+        channel: &str,
+        user: &str,
+    ) -> ClusterMessage {
         ClusterMessage {
             msg_type: msg_type.to_string(),
             room_id: room.to_string(),
@@ -1447,6 +1799,8 @@ mod tests {
             status: None,
             data: None,
             signal_msg: None,
+            path: Vec::new(),
+            sync: false,
         }
     }
 
@@ -1455,6 +1809,62 @@ mod tests {
         tokio::sync::mpsc::Receiver<Result<Message, axum::Error>>,
     ) {
         tokio::sync::mpsc::channel(OUTBOUND_QUEUE_CAPACITY)
+    }
+
+    #[test]
+    fn static_peer_urls_are_normalized_and_deduplicated() {
+        let urls = parse_cluster_peer_urls(
+            "https://relay.example.com, relay.example.com, wss://other.example.com/custom",
+            "wss",
+        );
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains(&"wss://relay.example.com/cluster-ws".to_string()));
+        assert!(urls.contains(&"wss://other.example.com/custom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn live_events_are_forwarded_through_a_relay_with_a_loop_safe_path() {
+        let state = test_state();
+        let mut forwarded = state.cluster_tx.subscribe();
+        let peer_users: PeerUsers = Arc::new(Mutex::new(HashSet::new()));
+        let origin = Uuid::new_v4().to_string();
+        let uid = Uuid::new_v4().to_string();
+        let mut joined = test_cluster_message_typed("user-joined", "room", "General", &uid);
+        joined.status = Some(test_user_status());
+        joined.path = vec![origin.clone()];
+
+        process_cluster_message(joined, &peer_users, "connection-a", &state).await;
+
+        let raw = forwarded.try_recv().expect("relay should flood live event");
+        let relayed: ClusterMessage = serde_json::from_str(&raw).unwrap();
+        assert_eq!(relayed.path, vec![origin, state.node_id.clone()]);
+        assert!(
+            state
+                .remote_users
+                .lock()
+                .await
+                .get("room")
+                .unwrap()
+                .get("General")
+                .unwrap()
+                .contains_key(&uid)
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_drops_events_whose_path_already_contains_this_node() {
+        let state = test_state();
+        let mut forwarded = state.cluster_tx.subscribe();
+        let peer_users: PeerUsers = Arc::new(Mutex::new(HashSet::new()));
+        let uid = Uuid::new_v4().to_string();
+        let mut joined = test_cluster_message_typed("user-joined", "room", "General", &uid);
+        joined.status = Some(test_user_status());
+        joined.path = vec![Uuid::new_v4().to_string(), state.node_id.clone()];
+
+        process_cluster_message(joined, &peer_users, "connection-a", &state).await;
+
+        assert!(state.remote_users.lock().await.is_empty());
+        assert!(forwarded.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1520,7 +1930,14 @@ mod tests {
         let new_key = ("room".to_string(), "new".to_string(), uid.clone());
         assert!(!peer_users.lock().await.contains(&old_key));
         assert!(peer_users.lock().await.contains(&new_key));
-        assert!(sources.lock().await.get(&new_key).unwrap().contains("conn-1"));
+        assert!(
+            sources
+                .lock()
+                .await
+                .get(&new_key)
+                .unwrap()
+                .contains("conn-1")
+        );
     }
 
     #[tokio::test]
@@ -1557,18 +1974,8 @@ mod tests {
             .or_default()
             .insert(local_uid.clone(), (local_tx, test_user_status()));
 
-        let dead: HashSet<(String, String, String)> =
-            std::iter::once(key.clone()).collect();
-        let affected = cleanup_dead_remote_users(
-            &dead,
-            &state.rooms,
-            &state.remote_users,
-            &state.remote_user_sources,
-            "conn-1",
-            &state.channel_creation_times,
-            &state.cluster_tx,
-        )
-        .await;
+        let dead: HashSet<(String, String, String)> = std::iter::once(key.clone()).collect();
+        let affected = cleanup_dead_remote_users(&dead, &state, "conn-1").await;
 
         assert!(state.remote_users.lock().await.get("room").is_none());
         assert!(!state.remote_user_sources.lock().await.contains_key(&key));
@@ -1597,32 +2004,30 @@ mod tests {
             .insert(uid.clone(), test_user_status());
         {
             let mut sources = state.remote_user_sources.lock().await;
-            sources.entry(key.clone()).or_default().insert("conn-1".to_string());
-            sources.entry(key.clone()).or_default().insert("conn-2".to_string());
+            sources
+                .entry(key.clone())
+                .or_default()
+                .insert("conn-1".to_string());
+            sources
+                .entry(key.clone())
+                .or_default()
+                .insert("conn-2".to_string());
         }
 
-        let dead: HashSet<(String, String, String)> =
-            std::iter::once(key.clone()).collect();
-        let affected = cleanup_dead_remote_users(
-            &dead,
-            &state.rooms,
-            &state.remote_users,
-            &state.remote_user_sources,
-            "conn-1",
-            &state.channel_creation_times,
-            &state.cluster_tx,
-        )
-        .await;
+        let dead: HashSet<(String, String, String)> = std::iter::once(key.clone()).collect();
+        let affected = cleanup_dead_remote_users(&dead, &state, "conn-1").await;
 
-        assert!(state
-            .remote_users
-            .lock()
-            .await
-            .get("room")
-            .unwrap()
-            .get("General")
-            .unwrap()
-            .contains_key(&uid));
+        assert!(
+            state
+                .remote_users
+                .lock()
+                .await
+                .get("room")
+                .unwrap()
+                .get("General")
+                .unwrap()
+                .contains_key(&uid)
+        );
         let remaining = state
             .remote_user_sources
             .lock()
@@ -1632,6 +2037,48 @@ mod tests {
             .clone();
         assert_eq!(remaining, HashSet::from(["conn-2".to_string()]));
         assert!(affected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn route_failure_keeps_a_user_reachable_through_another_peer() {
+        let state = test_state();
+        let uid = Uuid::new_v4().to_string();
+        let key = ("room".to_string(), "General".to_string(), uid.clone());
+        state
+            .remote_users
+            .lock()
+            .await
+            .entry("room".to_string())
+            .or_default()
+            .entry("General".to_string())
+            .or_default()
+            .insert(uid.clone(), test_user_status());
+        state.remote_user_sources.lock().await.insert(
+            key,
+            HashSet::from(["route-a".to_string(), "route-b".to_string()]),
+        );
+
+        let peer_users: PeerUsers = Arc::new(Mutex::new(HashSet::from([(
+            "room".to_string(),
+            "General".to_string(),
+            uid.clone(),
+        )])));
+        let mut unreachable =
+            test_cluster_message_typed("user-unreachable", "room", "General", &uid);
+        unreachable.path = vec![Uuid::new_v4().to_string()];
+        process_cluster_message(unreachable, &peer_users, "route-a", &state).await;
+
+        assert!(
+            state
+                .remote_users
+                .lock()
+                .await
+                .get("room")
+                .unwrap()
+                .get("General")
+                .unwrap()
+                .contains_key(&uid)
+        );
     }
 
     #[tokio::test]
@@ -1672,15 +2119,17 @@ mod tests {
         joined.status = Some(test_user_status());
         handle_cluster_message(&joined, &state.rooms, &state.remote_users, &state).await;
 
-        assert!(state
-            .remote_users
-            .lock()
-            .await
-            .get("room")
-            .unwrap()
-            .get("General")
-            .unwrap()
-            .contains_key(&remote_uid));
+        assert!(
+            state
+                .remote_users
+                .lock()
+                .await
+                .get("room")
+                .unwrap()
+                .get("General")
+                .unwrap()
+                .contains_key(&remote_uid)
+        );
         let msg = local_rx.try_recv().unwrap().unwrap();
         match msg {
             Message::Text(t) => assert!(t.contains("user-joined")),
@@ -1711,15 +2160,17 @@ mod tests {
         let kick = test_cluster_message_typed("user-kicked", "room", "General", &victim_uid);
         handle_cluster_message(&kick, &state.rooms, &state.remote_users, &state).await;
 
-        assert!(!state
-            .rooms
-            .lock()
-            .await
-            .get("room")
-            .unwrap()
-            .get("General")
-            .unwrap()
-            .contains_key(&victim_uid));
+        assert!(
+            !state
+                .rooms
+                .lock()
+                .await
+                .get("room")
+                .unwrap()
+                .get("General")
+                .unwrap()
+                .contains_key(&victim_uid)
+        );
 
         let victim_first = victim_rx.try_recv().unwrap().unwrap();
         match victim_first {
@@ -1812,9 +2263,10 @@ mod tests {
         {
             let mut rooms = state.rooms.lock().await;
             let room = rooms.entry("room".to_string()).or_default();
-            room.entry("old".to_string())
-                .or_default()
-                .insert(occupant_uid.clone(), (test_spy_channel().0, test_user_status()));
+            room.entry("old".to_string()).or_default().insert(
+                occupant_uid.clone(),
+                (test_spy_channel().0, test_user_status()),
+            );
         }
 
         let mut rename = test_cluster_message_typed(
@@ -1871,9 +2323,10 @@ mod tests {
         {
             let mut rooms = state.rooms.lock().await;
             let room = rooms.entry("room".to_string()).or_default();
-            room.entry("old".to_string())
-                .or_default()
-                .insert(occupant_uid.clone(), (test_spy_channel().0, test_user_status()));
+            room.entry("old".to_string()).or_default().insert(
+                occupant_uid.clone(),
+                (test_spy_channel().0, test_user_status()),
+            );
         }
 
         let del = test_cluster_message_typed(
