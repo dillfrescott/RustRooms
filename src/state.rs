@@ -53,49 +53,38 @@ pub(crate) type RoomMap = Arc<Mutex<HashMap<String, ChannelMap>>>;
 pub(crate) type RoomCleanupMap = Arc<Mutex<HashMap<String, u64>>>;
 pub(crate) type RemoteUsersMap =
     Arc<Mutex<HashMap<String, HashMap<String, HashMap<String, UserStatus>>>>>;
-pub(crate) type RemoteUserSourcesMap =
-    Arc<Mutex<HashMap<(String, String, String), HashSet<String>>>>;
-// The first known, loop-free route from the originating node to a remote
-// user. It is included in connection snapshots so relay nodes can replay
-// state without creating circular ownership/liveness references.
-pub(crate) type RemoteUserPathsMap = Arc<Mutex<HashMap<(String, String, String), Vec<String>>>>;
+pub(crate) type RemoteUserKey = (String, String, String);
+pub(crate) type RemoteUserOwnersMap = Arc<Mutex<HashMap<RemoteUserKey, String>>>;
 pub(crate) type ChannelCreationTimesMap = Arc<Mutex<HashMap<String, HashMap<String, u64>>>>;
 pub(crate) const ROOM_EMPTY_GRACE_SECS: u64 = 120;
 pub(crate) const MAX_ROOM_ID_LEN: usize = 64;
 pub(crate) const MAX_CHANNEL_ID_LEN: usize = 32;
 pub(crate) const MAX_NICKNAME_LEN: usize = 32;
-// Avatar data URLs are relayed to every member of a channel and to every cluster
-// node on every join/update, so the cap must stay small to bound amplification.
+// Avatar data URLs are sent to every member of a channel and every distributed
+// instance on join/update, so the cap must stay small to bound amplification.
 // 2 MiB of base64 is roughly 1.5 MiB of raw image data.
 pub(crate) const MAX_AVATAR_DATA_LEN: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_STATIC_FRAME_DATA_LEN: usize = 512 * 1024;
 pub(crate) const CLIENT_WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
-// Cluster join messages contain the profile in both status and signaling data.
-pub(crate) const CLUSTER_WS_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
+// Distributed join messages contain the profile in both status and signaling data.
+pub(crate) const DISTRIBUTED_MAX_MESSAGE_SIZE: usize = 32 * 1024 * 1024;
 pub(crate) const OUTBOUND_QUEUE_CAPACITY: usize = 32;
-pub(crate) const CLUSTER_BROADCAST_CAPACITY: usize = 256;
-pub(crate) const CLUSTER_MAX_PATH_HOPS: usize = 32;
-// Cluster links send an app-level keepalive frame every CLUSTER_KEEPALIVE_SECS
-// and treat CLUSTER_PEER_TIMEOUT_SECS of total silence as a dead peer, so
-// hard-crashed nodes don't leave ghost users in remote_users indefinitely.
-pub(crate) const CLUSTER_KEEPALIVE_SECS: u64 = 5;
-pub(crate) const CLUSTER_PEER_TIMEOUT_SECS: u64 = 30;
+pub(crate) const DISTRIBUTED_BROADCAST_CAPACITY: usize = 256;
+// Redis heartbeats expire hard-crashed nodes so they do not leave ghost users.
+pub(crate) const REDIS_HEARTBEAT_SECS: u64 = 5;
+pub(crate) const REDIS_NODE_TIMEOUT_SECS: u64 = 30;
 pub(crate) const MESSAGE_RATE_WINDOW_SECS: u64 = 10;
 pub(crate) const MAX_MESSAGES_PER_RATE_WINDOW: u32 = 240;
 // Byte budget per rate window: bounds JSON parse work even for huge frames.
 // Plenty for a join (avatar + static frame) plus profile updates and signaling.
 pub(crate) const MAX_BYTES_PER_RATE_WINDOW: usize = 16 * 1024 * 1024;
-// Cap for relayed message payloads (signaling, cam/screen toggles, identify).
+// Cap for distributed payloads (signaling, cam/screen toggles, identify).
 // Sized to fit a maximum-size avatar plus static frame.
-pub(crate) const MAX_RELAY_DATA_LEN: usize = 3 * 1024 * 1024;
+pub(crate) const MAX_DISTRIBUTED_DATA_LEN: usize = 3 * 1024 * 1024;
 pub(crate) const PROFILE_IMAGE_UPDATE_COOLDOWN_SECS: u64 = 5;
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ClusterMessage {
+pub(crate) struct DistributedMessage {
     #[serde(rename = "type")]
     pub(crate) msg_type: String,
     pub(crate) room_id: String,
@@ -108,15 +97,6 @@ pub(crate) struct ClusterMessage {
     pub(crate) data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) signal_msg: Option<String>,
-    // Node IDs traversed by this event. Relays append themselves and reject
-    // messages which already contain their own ID, preventing forwarding
-    // loops and circular ghost-user references in arbitrary cluster graphs.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) path: Vec<String>,
-    // Snapshot records initialize a newly connected peer but are not flooded
-    // again. Live events are flooded and deduplicated by msg_id.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub(crate) sync: bool,
 }
 
 #[derive(Clone)]
@@ -124,17 +104,13 @@ pub(crate) struct AppState {
     pub(crate) rooms: RoomMap,
     pub(crate) room_cleanup_generations: RoomCleanupMap,
     pub(crate) room_creation_password: Option<String>,
-    pub(crate) cluster_tx: tokio::sync::broadcast::Sender<String>,
+    pub(crate) distributed_tx: tokio::sync::broadcast::Sender<String>,
     pub(crate) remote_users: RemoteUsersMap,
-    pub(crate) remote_user_sources: RemoteUserSourcesMap,
-    pub(crate) remote_user_paths: RemoteUserPathsMap,
+    pub(crate) remote_user_owners: RemoteUserOwnersMap,
     pub(crate) channel_creation_times: ChannelCreationTimesMap,
-    pub(crate) cluster_key: Option<String>,
-    pub(crate) cluster_scheme: String,
     pub(crate) allowed_url: Option<String>,
-    pub(crate) connected_peers: Arc<Mutex<HashSet<String>>>,
-    pub recent_cluster_msg_ids: Arc<Mutex<HashSet<String>>>,
-    pub cluster_msg_history: Arc<Mutex<VecDeque<String>>>,
+    pub recent_distributed_msg_ids: Arc<Mutex<HashSet<String>>>,
+    pub distributed_msg_history: Arc<Mutex<VecDeque<String>>>,
     pub(crate) node_id: String,
 }
 

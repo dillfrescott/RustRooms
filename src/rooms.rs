@@ -1,7 +1,7 @@
 use crate::{
-    cluster::{
-        broadcast_channel_list, broadcast_channel_upsert, cluster_broadcast, remove_remote_user,
-        schedule_empty_room_cleanup,
+    distributed::{
+        broadcast_channel_list, broadcast_channel_upsert, distributed_broadcast,
+        remove_remote_user, schedule_empty_room_cleanup,
     },
     routes::host_is_allowed,
     state::*,
@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 // The room-creation password gates the *creation* of a room, never joining
 // an existing one: if the room already has members on this node or any
-// cluster node, no password is required.
+// distributed instance, no password is required.
 fn room_creation_needs_password(
     required: Option<&str>,
     exists_locally: bool,
@@ -282,8 +282,8 @@ pub(crate) async fn handle_socket(
 
                             // Canonical status stored for this identity (either
                             // the client's fresh profile or the server's kept
-                            // copy on a stale reconnect); announced to peers
-                            // and echoed back to the client via existing-users.
+                            // copy on a stale reconnect); announced to other
+                            // instances and echoed back via existing-users.
                             let joined_status;
                             {
                                 let room_needs_password = {
@@ -479,9 +479,9 @@ pub(crate) async fn handle_socket(
                                 let _ = tx.try_send(Ok(Message::Text(existing_users_msg.into())));
                             }
 
-                            // Only forward the validated public profile fields. In particular, the
-                            // room-creation password must never be relayed to peers or cluster nodes.
-                            // Uses the canonical stored status so a stale reconnect
+                            // Only forward validated public profile fields. The
+                            // room-creation password must never be published to other
+                            // instances. Uses the canonical stored status so a stale reconnect
                             // announces the server's copy, not the client's.
                             let created_at = state
                                 .channel_creation_times
@@ -548,9 +548,9 @@ pub(crate) async fn handle_socket(
                                 if channel_id != "General" {
                                     broadcast_channel_upsert(&state, &room_id, &channel_id).await;
                                 }
-                                cluster_broadcast(
+                                distributed_broadcast(
                                     &state,
-                                    &ClusterMessage {
+                                    &DistributedMessage {
                                         msg_type: "user-joined".into(),
                                         room_id: room_id.clone(),
                                         channel_id: channel_id.clone(),
@@ -559,8 +559,6 @@ pub(crate) async fn handle_socket(
                                         status: Some(joined_status.clone()),
                                         data: notify_data.clone(),
                                         signal_msg: None,
-                                        path: Vec::new(),
-                                        sync: false,
                                     },
                                 )
                                 .await;
@@ -680,7 +678,7 @@ pub(crate) async fn handle_socket(
                                         }
                                         // Only propagate when something actually changed,
                                         // so spammy same-value updates don't trigger a
-                                        // room-list rebuild and cluster broadcast.
+                                        // room-list rebuild and distributed broadcast.
                                         if status != &previous {
                                             full_status = Some(status.clone());
                                         }
@@ -709,9 +707,9 @@ pub(crate) async fn handle_socket(
                                     }
 
                                     if let Some(ref status) = full_status {
-                                        cluster_broadcast(
+                                        distributed_broadcast(
                                             &state,
-                                            &ClusterMessage {
+                                            &DistributedMessage {
                                                 msg_type: "user-update".into(),
                                                 room_id: room_id.clone(),
                                                 channel_id: channel_id.clone(),
@@ -720,8 +718,6 @@ pub(crate) async fn handle_socket(
                                                 status: Some(status.clone()),
                                                 data: None,
                                                 signal_msg: None,
-                                                path: Vec::new(),
-                                                sync: false,
                                             },
                                         )
                                         .await;
@@ -738,9 +734,9 @@ pub(crate) async fn handle_socket(
                                 .await;
                             }
                         } else if parsed.msg_type == "cam-toggle" {
-                            // Relay payloads are amplified to every room member and
-                            // every cluster node, so reject oversized ones.
-                            if text.len() <= MAX_RELAY_DATA_LEN {
+                            // Distributed payloads are amplified to every room member and
+                            // every instance, so reject oversized ones.
+                            if text.len() <= MAX_DISTRIBUTED_DATA_LEN {
                                 let rooms_lock = rooms.lock().await;
                                 if let Some(room) = rooms_lock.get(&room_id)
                                     && let Some(channel) = room.get(&channel_id)
@@ -761,9 +757,9 @@ pub(crate) async fn handle_socket(
                                         }
                                     }
                                 }
-                                cluster_broadcast(
+                                distributed_broadcast(
                                     &state,
-                                    &ClusterMessage {
+                                    &DistributedMessage {
                                         msg_type: "cam-toggle".into(),
                                         room_id: room_id.clone(),
                                         channel_id: channel_id.clone(),
@@ -772,14 +768,12 @@ pub(crate) async fn handle_socket(
                                         status: None,
                                         data: parsed.data.clone(),
                                         signal_msg: None,
-                                        path: Vec::new(),
-                                        sync: false,
                                     },
                                 )
                                 .await;
                             }
                         } else if parsed.msg_type == "screen-toggle" {
-                            if text.len() <= MAX_RELAY_DATA_LEN {
+                            if text.len() <= MAX_DISTRIBUTED_DATA_LEN {
                                 {
                                     let mut rooms_lock = rooms.lock().await;
                                     if let Some(room) = rooms_lock.get_mut(&room_id)
@@ -813,9 +807,9 @@ pub(crate) async fn handle_socket(
                                     }
                                 }
 
-                                cluster_broadcast(
+                                distributed_broadcast(
                                     &state,
-                                    &ClusterMessage {
+                                    &DistributedMessage {
                                         msg_type: "screen-toggle".into(),
                                         room_id: room_id.clone(),
                                         channel_id: channel_id.clone(),
@@ -824,8 +818,6 @@ pub(crate) async fn handle_socket(
                                         status: None,
                                         data: parsed.data.clone(),
                                         signal_msg: None,
-                                        path: Vec::new(),
-                                        sync: false,
                                     },
                                 )
                                 .await;
@@ -914,9 +906,9 @@ pub(crate) async fn handle_socket(
                                         let _ = kicked_tx.try_send(Ok(Message::Close(None)));
                                     }
 
-                                    cluster_broadcast(
+                                    distributed_broadcast(
                                         &state,
-                                        &ClusterMessage {
+                                        &DistributedMessage {
                                             msg_type: "user-kicked".into(),
                                             room_id: room_id.clone(),
                                             channel_id: channel_id.clone(),
@@ -925,8 +917,6 @@ pub(crate) async fn handle_socket(
                                             status: None,
                                             data: None,
                                             signal_msg: None,
-                                            path: Vec::new(),
-                                            sync: false,
                                         },
                                     )
                                     .await;
@@ -943,9 +933,8 @@ pub(crate) async fn handle_socket(
                                     schedule_empty_room_cleanup(&state, &room_id).await;
                                 } else {
                                     drop(rooms_lock);
-                                    // Target isn't local; if they exist on another
-                                    // cluster node, broadcast the kick so that
-                                    // node removes them and closes their socket.
+                                    // Target isn't local; publish the kick so the
+                                    // hosting instance removes them and closes the socket.
                                     let is_remote = {
                                         let rl = remote_users.lock().await;
                                         rl.get(&room_id)
@@ -974,9 +963,9 @@ pub(crate) async fn handle_socket(
                                             &room_id,
                                         )
                                         .await;
-                                        cluster_broadcast(
+                                        distributed_broadcast(
                                             &state,
-                                            &ClusterMessage {
+                                            &DistributedMessage {
                                                 msg_type: "user-kicked".into(),
                                                 room_id: room_id.clone(),
                                                 channel_id: channel_id.clone(),
@@ -985,8 +974,6 @@ pub(crate) async fn handle_socket(
                                                 status: None,
                                                 data: None,
                                                 signal_msg: None,
-                                                path: Vec::new(),
-                                                sync: false,
                                             },
                                         )
                                         .await;
@@ -1118,9 +1105,9 @@ pub(crate) async fn handle_socket(
                                             }
                                         }
 
-                                        cluster_broadcast(
+                                        distributed_broadcast(
                                             &state,
-                                            &ClusterMessage {
+                                            &DistributedMessage {
                                                 msg_type: "rename-channel".into(),
                                                 room_id: room_id.clone(),
                                                 channel_id: target_channel_id.clone(),
@@ -1131,8 +1118,6 @@ pub(crate) async fn handle_socket(
                                                     serde_json::json!({ "roomId": room_id, "oldName": target_channel_id, "newName": new_name_str }),
                                                 ),
                                                 signal_msg: None,
-                                                path: Vec::new(),
-                                                sync: false,
                                             },
                                         ).await;
                                         broadcast_channel_list(
@@ -1210,9 +1195,9 @@ pub(crate) async fn handle_socket(
                                         }
                                     }
 
-                                    cluster_broadcast(
+                                    distributed_broadcast(
                                         &state,
-                                        &ClusterMessage {
+                                        &DistributedMessage {
                                             msg_type: "delete-channel".into(),
                                             room_id: room_id.clone(),
                                             channel_id: target_channel_id.clone(),
@@ -1221,8 +1206,6 @@ pub(crate) async fn handle_socket(
                                             status: None,
                                             data: None,
                                             signal_msg: None,
-                                            path: Vec::new(),
-                                            sync: false,
                                         },
                                     )
                                     .await;
@@ -1236,7 +1219,7 @@ pub(crate) async fn handle_socket(
                                 }
                             }
                         } else if let Some(ref target_id) = parsed.target
-                            && text.len() <= MAX_RELAY_DATA_LEN
+                            && text.len() <= MAX_DISTRIBUTED_DATA_LEN
                         {
                             let mut found = false;
                             {
@@ -1268,9 +1251,9 @@ pub(crate) async fn handle_socket(
                                     forwarded_msg.user_id = Some(user_id.clone());
                                     let forwarded_text =
                                         serde_json::to_string(&forwarded_msg).unwrap();
-                                    cluster_broadcast(
+                                    distributed_broadcast(
                                         &state,
-                                        &ClusterMessage {
+                                        &DistributedMessage {
                                             msg_type: "signal".into(),
                                             room_id: room_id.clone(),
                                             channel_id: channel_id.clone(),
@@ -1279,8 +1262,6 @@ pub(crate) async fn handle_socket(
                                             status: None,
                                             data: None,
                                             signal_msg: Some(forwarded_text),
-                                            path: Vec::new(),
-                                            sync: false,
                                         },
                                     )
                                     .await;
@@ -1376,9 +1357,9 @@ pub(crate) async fn handle_socket(
     }
 
     if is_joined && actually_removed {
-        cluster_broadcast(
+        distributed_broadcast(
             &state,
-            &ClusterMessage {
+            &DistributedMessage {
                 msg_type: "user-left".into(),
                 room_id: room_id.clone(),
                 channel_id: channel_id.clone(),
@@ -1387,8 +1368,6 @@ pub(crate) async fn handle_socket(
                 status: None,
                 data: None,
                 signal_msg: None,
-                path: Vec::new(),
-                sync: false,
             },
         )
         .await;

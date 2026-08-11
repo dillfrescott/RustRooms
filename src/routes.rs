@@ -66,7 +66,7 @@ pub(crate) async fn new_room(
             }
             // Static routes shadow /{room_id}, so these names would redirect
             // or 404 instead of creating a room.
-            if trimmed == "new" || trimmed == "cluster-ws" {
+            if trimmed == "new" {
                 return Err((
                     axum::http::StatusCode::BAD_REQUEST,
                     "That room name is reserved. Please choose another.",
@@ -182,17 +182,13 @@ mod tests {
             rooms: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             room_cleanup_generations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             room_creation_password: password.map(str::to_string),
-            cluster_tx: tokio::sync::broadcast::channel(CLUSTER_BROADCAST_CAPACITY).0,
+            distributed_tx: tokio::sync::broadcast::channel(DISTRIBUTED_BROADCAST_CAPACITY).0,
             remote_users: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            remote_user_sources: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            remote_user_paths: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            remote_user_owners: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             channel_creation_times: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            cluster_key: None,
-            cluster_scheme: "ws".to_string(),
             allowed_url: None,
-            connected_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
-            recent_cluster_msg_ids: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
-            cluster_msg_history: Arc::new(tokio::sync::Mutex::new(VecDeque::new())),
+            recent_distributed_msg_ids: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+            distributed_msg_history: Arc::new(tokio::sync::Mutex::new(VecDeque::new())),
             node_id: Uuid::new_v4().to_string(),
         }
     }
@@ -248,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn new_room_rejects_reserved_names() {
         let state = test_state(None);
-        for name in ["new", "cluster-ws"] {
+        for name in ["new"] {
             let params = HashMap::from([("name".to_string(), name.to_string())]);
             let err = new_room(State(state.clone()), HeaderMap::new(), Query(params))
                 .await

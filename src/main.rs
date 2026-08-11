@@ -1,13 +1,12 @@
-mod cluster;
+mod distributed;
+mod redis_distributed;
 mod rooms;
 mod routes;
 mod state;
 mod web_assets;
 
 use axum::{Router, routing::get};
-use cluster::{
-    cluster_ws_handler, parse_cluster_peer_urls, spawn_dht_discovery, spawn_static_peer_connections,
-};
+use redis_distributed::{parse_redis_urls, spawn_redis_distributed};
 use rooms::channel_status;
 use routes::*;
 use state::*;
@@ -28,56 +27,29 @@ async fn main() {
         .ok()
         .map(|p| p.trim().to_string())
         .filter(|s| !s.is_empty());
-    let cluster_key = std::env::var("KEY")
+    let raw_redis_urls: Vec<_> = ["REDIS_URL", "REDIS_URLS"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .collect();
+    let redis_urls = parse_redis_urls(raw_redis_urls.iter().map(String::as_str));
+    let redis_prefix = std::env::var("REDIS_PREFIX")
         .ok()
-        .map(|k| k.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let cluster_scheme = std::env::var("CLUSTER_SCHEME")
-        .ok()
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| s == "wss")
-        .unwrap_or_else(|| "ws".to_string());
+        .map(|prefix| prefix.trim().to_string())
+        .filter(|prefix| !prefix.is_empty())
+        .unwrap_or_else(|| "rustrooms".to_string());
     let allowed_url = std::env::var("URL")
         .ok()
         .and_then(|url| normalize_configured_host(&url));
-    let configured_peer_urls = ["CLUSTER_PEERS", "CLUSTER_RELAY_URL"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .flat_map(|raw| parse_cluster_peer_urls(&raw, &cluster_scheme))
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let dht_enabled = std::env::var("CLUSTER_DHT")
-        .ok()
-        .map(|value| {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off" | "no"
-            )
-        })
-        .unwrap_or(true);
-    let (cluster_tx, _) = tokio::sync::broadcast::channel::<String>(CLUSTER_BROADCAST_CAPACITY);
+    let (distributed_tx, _) =
+        tokio::sync::broadcast::channel::<String>(DISTRIBUTED_BROADCAST_CAPACITY);
     let remote_users: RemoteUsersMap = Arc::new(Mutex::new(HashMap::new()));
-    let remote_user_sources: RemoteUserSourcesMap = Arc::new(Mutex::new(HashMap::new()));
-    let remote_user_paths: RemoteUserPathsMap = Arc::new(Mutex::new(HashMap::new()));
+    let remote_user_owners: RemoteUserOwnersMap = Arc::new(Mutex::new(HashMap::new()));
 
-    if cluster_key.is_some() {
+    if !redis_urls.is_empty() {
         println!(
-            "CLUSTER: Enabled via KEY env var ({} persistent peer(s), DHT: {}, default scheme: {})",
-            configured_peer_urls.len(),
-            if dht_enabled { "enabled" } else { "disabled" },
-            cluster_scheme
+            "REDIS DISTRIBUTED: Enabled with {} Redis endpoint(s) (namespace: {redis_prefix})",
+            redis_urls.len()
         );
-        let has_unencrypted_links = configured_peer_urls
-            .iter()
-            .any(|url| url.starts_with("ws://"))
-            || (dht_enabled && cluster_scheme == "ws");
-        if has_unencrypted_links {
-            eprintln!("WARNING: CLUSTER: Using unencrypted ws:// for some inter-instance traffic.");
-            eprintln!(
-                "WARNING: Use wss:// peer URLs (and CLUSTER_SCHEME=wss for DHT) over untrusted networks."
-            );
-        }
     }
 
     if let Some(ref url) = allowed_url {
@@ -93,17 +65,13 @@ async fn main() {
         rooms,
         room_cleanup_generations,
         room_creation_password,
-        cluster_tx,
+        distributed_tx,
         remote_users,
-        remote_user_sources,
-        remote_user_paths,
+        remote_user_owners,
         channel_creation_times,
-        cluster_key,
-        cluster_scheme,
         allowed_url,
-        connected_peers: Arc::new(Mutex::new(HashSet::new())),
-        recent_cluster_msg_ids: Arc::new(Mutex::new(HashSet::new())),
-        cluster_msg_history: Arc::new(Mutex::new(VecDeque::new())),
+        recent_distributed_msg_ids: Arc::new(Mutex::new(HashSet::new())),
+        distributed_msg_history: Arc::new(Mutex::new(VecDeque::new())),
         node_id,
     };
 
@@ -147,7 +115,6 @@ async fn main() {
             "/ws/{room_id}/{channel_id}/",
             get(redirect_ws_trailing_slash),
         )
-        .route("/cluster-ws", get(cluster_ws_handler))
         .with_state(state.clone());
 
     let port = std::env::var("PORT")
@@ -165,11 +132,8 @@ async fn main() {
     };
     println!("SERVER RUNNING ON PORT {}", port);
 
-    if state.cluster_key.is_some() {
-        spawn_static_peer_connections(state.clone(), configured_peer_urls);
-        if dht_enabled {
-            spawn_dht_discovery(state.clone(), port);
-        }
+    if !redis_urls.is_empty() {
+        spawn_redis_distributed(state.clone(), redis_urls, redis_prefix);
     }
 
     axum::serve(listener, app).await.unwrap();
