@@ -15,7 +15,7 @@
 
     const ctx = canvas.getContext('2d');
     const overlay = document.getElementById('welcomeOverlay');
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     /* ---- Coastline data (Natural Earth 110m, simplified) ----
      * Each polyline is delta-encoded integers: [lon0, lat0, dlon1, dlat1, ...]
@@ -317,6 +317,7 @@
 
     /* -------------------- interaction -------------------- */
     function onDown(e) {
+        if (motionPreference.matches) return;
         dragging = true;
         canvas.setPointerCapture(e.pointerId);
         lastX = e.clientX; lastY = e.clientY;
@@ -324,7 +325,7 @@
         dragVelY = 0; dragVelX = 0;
     }
     function onMove(e) {
-        if (!dragging) return;
+        if (motionPreference.matches || !dragging) return;
         const now = performance.now();
         const dx = e.clientX - lastX;
         const dy = e.clientY - lastY;
@@ -357,7 +358,7 @@
         resize(); // no-op unless the canvas size changed
         if (!W || !H) return;
 
-        if (!dragging && !reducedMotion) {
+        if (!dragging && !motionPreference.matches) {
             // inertia decays, auto-spin blends back in
             dragVelY *= Math.pow(0.02, dt);
             dragVelX *= Math.pow(0.02, dt);
@@ -369,7 +370,7 @@
         drawSphere();
         drawGraticule();
         drawLand();
-        if (!reducedMotion) drawArcs(now);
+        if (!motionPreference.matches) drawArcs(now);
     }
     requestAnimationFrame(frame);
 })();

@@ -12,7 +12,7 @@
     'use strict';
 
     const root = document.documentElement;
-    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     // Random per-session phases — every visit marbles differently.
     const ph = [];
@@ -49,21 +49,40 @@
         root.style.setProperty('--border-accent',    `hsl(${hue.toFixed(1)} ${sat.toFixed(1)}% ${lig.toFixed(1)}%)`);
     }
 
-    if (reducedMotion) {
-        apply(0);
-        return;
-    }
-
     let last = 0;
+    let animationId = null;
     const t0 = performance.now() + Math.random() * 60000; // random start point in the flow
 
     function frame(now) {
+        if (motionPreference.matches) {
+            animationId = null;
+            apply(0);
+            return;
+        }
+
         // ~24 fps is plenty for a slow swirl and keeps CPU idle-low.
         if (now - last > 42) {
             last = now;
             apply((now - t0) / 1000);
         }
-        requestAnimationFrame(frame);
+        animationId = requestAnimationFrame(frame);
     }
-    requestAnimationFrame(frame);
+
+    function updateMotionPreference() {
+        if (motionPreference.matches) {
+            if (animationId !== null) cancelAnimationFrame(animationId);
+            animationId = null;
+            apply(0);
+        } else if (animationId === null) {
+            last = 0;
+            animationId = requestAnimationFrame(frame);
+        }
+    }
+
+    if (motionPreference.addEventListener) {
+        motionPreference.addEventListener('change', updateMotionPreference);
+    } else {
+        motionPreference.addListener(updateMotionPreference);
+    }
+    updateMotionPreference();
 })();

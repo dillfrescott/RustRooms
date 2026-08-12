@@ -688,12 +688,12 @@
             0%, 100% {
                 border-color: var(--accent);
                 box-shadow: 0 0 10px 1px var(--accent-glow),
-                    inset 0 0 14px 0 color-mix(in srgb, var(--accent) 12%, transparent);
+                    inset 0 0 14px 0 var(--accent-glow);
             }
             50% {
                 border-color: var(--accent-blue);
                 box-shadow: 0 0 26px 5px var(--accent-glow),
-                    inset 0 0 22px 0 color-mix(in srgb, var(--accent-blue) 20%, transparent);
+                    inset 0 0 22px 0 var(--accent-glow);
             }
         }
 
@@ -704,6 +704,13 @@
             z-index: 50;
         }
 
+        /* The empty-avatar rule has greater specificity than .speaking-glow.
+         * Override it explicitly so Safari still paints the VAD border when
+         * there is no image (especially when reduced motion is enabled). */
+        .avatar-center.avatar-empty.speaking-glow {
+            border: 3px solid var(--accent);
+        }
+
         #localPipWrapper.speaking-glow {
             border: 2px solid var(--accent);
             z-index: 75;
@@ -712,6 +719,9 @@
         @media (prefers-reduced-motion: reduce) {
             .speaking-glow {
                 animation: none;
+                border-color: var(--accent);
+                box-shadow: 0 0 16px 3px var(--accent-glow),
+                    inset 0 0 14px 0 var(--accent-glow);
             }
         }
 
@@ -2019,6 +2029,24 @@
             #emptyState > div:first-child::after {
                 animation: none;
                 opacity: 0;
+            }
+
+            /* Stop all remaining decorative CSS motion throughout the app.
+             * Statuses remain visible through their static colors/borders. */
+            *,
+            *::before,
+            *::after {
+                animation: none !important;
+                transition: none !important;
+                scroll-behavior: auto !important;
+            }
+
+            #globeCanvas {
+                cursor: default;
+            }
+
+            .otg-rotate-anim {
+                transform: rotate(-90deg);
             }
         }
 
