@@ -40,6 +40,10 @@
             peerCamStatus = {};
             peerScreenStatus = {};
             peerScreenHasAudio = {};
+            peerMicTrackId = {};
+            peerScreenAudioTrackId = {};
+            peerCamVideoTrackId = {};
+            peerScreenVideoTrackId = {};
             pendingCandidates = {};
             userAvatarCache = {};
 
@@ -90,6 +94,8 @@
                                     screenEnabled: screenEnabled,
                                     screenAudio: screenHasAudio,
                                     micTrackId: audioTrack ? audioTrack.id : null,
+                                    camVideoTrackId: localStream ? (localStream.getVideoTracks()[0]?.id || null) : null,
+                                    screenVideoTrackId: screenStream ? (screenStream.getVideoTracks()[0]?.id || null) : null,
                                     screenAudioTrackId: screenStream ? (screenStream.getAudioTracks()[0]?.id || null) : null,
                                     isMuted: isMuted,
                                     isDeafened: isDeafened,
@@ -251,6 +257,8 @@
                                                 screenEnabled: myScreenEnabled,
                                                 screenAudio: myScreenHasAudio,
                                                 micTrackId: myAudioTrack ? myAudioTrack.id : null,
+                                                camVideoTrackId: localStream ? (localStream.getVideoTracks()[0]?.id || null) : null,
+                                                screenVideoTrackId: screenStream ? (screenStream.getVideoTracks()[0]?.id || null) : null,
                                                 screenAudioTrackId: screenStream ? (screenStream.getAudioTracks()[0]?.id || null) : null,
                                                 isMuted: myMuted,
                                                 isDeafened: isDeafened,
@@ -324,7 +332,9 @@
                                     break;
                                 case 'cam-toggle':
                                     if (msg.data && msg.data.enabled !== undefined) {
+                                        updatePeerTrackHints(msg.userId, msg.data);
                                         peerCamStatus[msg.userId] = msg.data.enabled;
+                                        updatePeerVideoLayout(msg.userId);
                                     }
                                     break;
                                 case 'screen-toggle':
@@ -337,8 +347,7 @@
                                         if (msg.data.enabled && msg.data.hasAudio === true) {
                                             ensureScreenAudioUI(msg.userId);
                                         }
-                                        const v = document.getElementById(`vid-${msg.userId}`);
-                                        if (v) v.style.objectFit = msg.data.enabled ? 'contain' : 'contain';
+                                        updatePeerVideoLayout(msg.userId);
 
                                         if (!msg.data.enabled || msg.data.hasAudio === false) {
                                             const row = document.getElementById(`vol-row-screen-${msg.userId}`);
@@ -1067,6 +1076,85 @@
                 .catch(e => console.error("Negotiation error", e));
         }
 
+        function getLiveVideoTrack(video) {
+            if (!video || !video.srcObject) return null;
+            return video.srcObject.getVideoTracks().find(track => track.readyState === 'live') || null;
+        }
+
+        function updatePeerVideoLayout(userId) {
+            const container = document.getElementById(`wrapper-${userId}`);
+            if (!container) return;
+
+            const cameraVideo = document.getElementById(`vid-${userId}`);
+            const screenVideo = document.getElementById(`screen-${userId}`);
+            const cameraTrack = getLiveVideoTrack(cameraVideo);
+            const screenTrack = getLiveVideoTrack(screenVideo);
+            const hasCamera = peerCamStatus[userId] !== false && !!cameraTrack;
+            const hasScreen = peerScreenStatus[userId] === true && !!screenTrack;
+
+            // Status messages arrive before renegotiation. Clear the old frame
+            // immediately so a removed sender can never leave a frozen screen.
+            if (peerCamStatus[userId] === false && cameraVideo?.srcObject) {
+                cameraVideo.srcObject.getVideoTracks().forEach(track => cameraVideo.srcObject.removeTrack(track));
+            }
+            if (peerScreenStatus[userId] === false && screenVideo?.srcObject) {
+                screenVideo.srcObject.getVideoTracks().forEach(track => screenVideo.srcObject.removeTrack(track));
+            }
+
+            container.classList.toggle('has-camera', hasCamera);
+            container.classList.toggle('has-screen', hasScreen);
+            cameraVideo?.classList.toggle('active', hasCamera);
+            screenVideo?.classList.toggle('active', hasScreen);
+        }
+
+        function addCameraTrackToPeer(pc, track) {
+            if (!track) return false;
+            if (pc._cameraVideoSender && pc.getSenders().includes(pc._cameraVideoSender)) {
+                pc._cameraVideoSender.replaceTrack(track).catch(error => console.warn('Camera replaceTrack failed:', error));
+                return false;
+            }
+            pc._cameraVideoSender = pc.addTrack(track, localStream || new MediaStream([track]));
+            return true;
+        }
+
+        function addScreenTrackToPeer(pc, track) {
+            if (!track) return false;
+            if (pc._screenVideoSender && pc.getSenders().includes(pc._screenVideoSender)) {
+                pc._screenVideoSender.replaceTrack(track).catch(error => console.warn('Screen replaceTrack failed:', error));
+                return false;
+            }
+            pc._screenVideoSender = pc.addTrack(track, screenStream || new MediaStream([track]));
+            return true;
+        }
+
+        function removePeerSender(pc, propertyName) {
+            const sender = pc[propertyName];
+            if (!sender || !pc.getSenders().includes(sender)) return false;
+            pc.removeTrack(sender);
+            pc[propertyName] = null;
+            return true;
+        }
+
+        function updateLocalMediaLayout() {
+            const wrapper = document.getElementById('localPipWrapper');
+            const cameraVideo = document.getElementById('localVideo');
+            const screenVideo = document.getElementById('localScreenVideo');
+            if (!wrapper || !cameraVideo || !screenVideo) return;
+
+            const cameraTrack = localStream?.getVideoTracks()[0];
+            const screenTrack = screenStream?.getVideoTracks()[0];
+            const hasCamera = !!cameraTrack && cameraTrack.enabled && cameraTrack.readyState === 'live';
+            const hasScreen = !!screenTrack && screenTrack.readyState === 'live';
+
+            cameraVideo.srcObject = hasCamera ? localStream : null;
+            screenVideo.srcObject = hasScreen ? screenStream : null;
+            wrapper.classList.toggle('has-camera', hasCamera);
+            wrapper.classList.toggle('has-screen', hasScreen);
+
+            const avatar = document.getElementById('localAvatarLayer');
+            if (avatar && (hasCamera || hasScreen)) avatar.style.display = 'none';
+        }
+
         function createPeerUI(userId, displayName, avatarUrl, remoteIsDeafened, remoteIsMuted, isGif, staticFrame) {
 
             if (document.getElementById(`wrapper-${userId}`)) {
@@ -1079,9 +1167,18 @@
 
             const vid = document.createElement('video');
             vid.id = `vid-${userId}`;
+            vid.className = 'camera-video';
             vid.autoplay = true;
             vid.playsInline = true;
             attachSinkId(vid, currentAudioOutputId);
+
+            const screenVid = document.createElement('video');
+            screenVid.id = `screen-${userId}`;
+            screenVid.className = 'screen-video';
+            screenVid.autoplay = true;
+            screenVid.playsInline = true;
+            screenVid.muted = true;
+            screenVid.srcObject = new MediaStream();
 
             const savedVol = getVolumeSettings(userId, 'main');
             vid.volume = savedVol;
@@ -1156,6 +1253,7 @@
             setupSmoothDragAndDrop(container);
 
             container.appendChild(vid);
+            container.appendChild(screenVid);
             container.appendChild(avatarLayer);
             container.appendChild(label);
             container.appendChild(volControls);
@@ -1182,31 +1280,29 @@
             peers[userId] = pc;
 
             if (localStream) {
-                localStream.getAudioTracks().forEach(track => pc.addTrack(track, localStream));
+                localStream.getAudioTracks().forEach(track => {
+                    pc._micAudioSender = pc.addTrack(track, localStream);
+                });
+                const cameraTrack = localStream.getVideoTracks()[0];
+                if (cameraTrack) addCameraTrackToPeer(pc, cameraTrack);
             }
 
             if (screenStream) {
                 const screenTrack = screenStream.getVideoTracks()[0];
-                if (screenTrack) {
-                    if (localStream) {
-                        pc.addTrack(screenTrack, localStream);
-                    } else {
-                        pc.addTrack(screenTrack, screenStream);
-                    }
-                }
+                if (screenTrack) addScreenTrackToPeer(pc, screenTrack);
+
                 const screenAudioTrack = screenStream.getAudioTracks()[0];
                 if (screenAudioTrack) {
                     const sender = pc.addTrack(screenAudioTrack, screenStream);
+                    pc._screenAudioSender = sender;
                     const params = sender.getParameters();
                     if (!params.encodings) params.encodings = [{}];
                     params.encodings[0].maxBitrate = 512000;
                     sender.setParameters(params).catch(e => console.warn(e));
                 }
-            } else if (localStream) {
-                localStream.getVideoTracks().forEach(track => pc.addTrack(track, localStream));
             }
 
-            if (!localStream || localStream.getVideoTracks().length === 0) {
+            if ((!localStream || localStream.getVideoTracks().length === 0) && !screenStream) {
                  pc.addTransceiver('video', { direction: 'recvonly' });
             }
 
@@ -1225,14 +1321,16 @@
 
                 let container = document.getElementById(`wrapper-${userId}`);
                 let vid = document.getElementById(`vid-${userId}`);
+                let screenVid = document.getElementById(`screen-${userId}`);
 
-                if (!container || !vid) {
+                if (!container || !vid || !screenVid) {
                     createPeerUI(userId, displayName, avatarUrl, remoteIsDeafened, isMuted, isGif, staticFrame);
                     container = document.getElementById(`wrapper-${userId}`);
                     vid = document.getElementById(`vid-${userId}`);
+                    screenVid = document.getElementById(`screen-${userId}`);
                 }
 
-                if (!vid || !vid.srcObject) {
+                if (!vid || !vid.srcObject || !screenVid || !screenVid.srcObject) {
                     console.error('[ontrack] Video element or srcObject is null for', userId);
                     return;
                 }
@@ -1241,16 +1339,33 @@
                 const mainStream = vid.srcObject;
 
                 if (event.track.kind === 'video') {
-                     mainStream.getVideoTracks().forEach(t => mainStream.removeTrack(t));
-                     mainStream.addTrack(event.track);
-                     vid.play().then(() => {
-                         const sv = getVolumeSettings(userId, 'main');
-                         if (vid.volume !== sv) vid.volume = sv;
-                     }).catch(e => console.error("Remote play err", e));
+                     const hintedScreenId = peerScreenVideoTrackId[userId];
+                     const hintedCameraId = peerCamVideoTrackId[userId];
+                     const cameraAlreadyAttached = !!getLiveVideoTrack(vid);
+                     const matchesCameraHint = !!hintedCameraId && event.track.id === hintedCameraId;
+                     const isScreenTrack = (!!hintedScreenId && event.track.id === hintedScreenId) ||
+                         (!matchesCameraHint && peerScreenStatus[userId] === true &&
+                          (peerCamStatus[userId] !== true || cameraAlreadyAttached));
+                     const targetVideo = isScreenTrack ? screenVid : vid;
+                     const targetStream = targetVideo.srcObject;
 
-                     event.track.onmute = () => { checkActive(userId); };
-                     event.track.onunmute = () => { checkActive(userId); };
-                     event.track.onended = () => { checkActive(userId); };
+                     targetStream.getVideoTracks().forEach(track => targetStream.removeTrack(track));
+                     targetStream.addTrack(event.track);
+                     targetVideo.play().then(() => {
+                         if (!isScreenTrack) {
+                             const savedVolume = getVolumeSettings(userId, 'main');
+                             if (vid.volume !== savedVolume) vid.volume = savedVolume;
+                         }
+                     }).catch(error => console.error('Remote play err', error));
+
+                     const refreshVideoLayout = () => updatePeerVideoLayout(userId);
+                     event.track.onmute = refreshVideoLayout;
+                     event.track.onunmute = refreshVideoLayout;
+                     event.track.onended = () => {
+                         if (targetVideo.srcObject) targetVideo.srcObject.removeTrack(event.track);
+                         updatePeerVideoLayout(userId);
+                     };
+                     updatePeerVideoLayout(userId);
                 }
 
                 if (event.track.kind === 'audio') {
@@ -1362,48 +1477,13 @@
                     }
                 }
 
-                const checkActive = (uid) => {
-                     const v = document.getElementById(`vid-${uid}`);
-                     if (!v || !v.srcObject) return;
-
-                     const isCamOff = peerCamStatus[uid] === false;
-                     const isScreenOn = peerScreenStatus[uid] === true;
-
-                     if (isScreenOn) {
-                         v.classList.add('active');
-                         v.style.objectFit = 'contain';
-                         return;
-                     }
-
-                     if (isCamOff) {
-                         v.classList.remove('active');
-                         return;
-                     }
-
-                     const vTracks = v.srcObject.getVideoTracks();
-                     let hasActiveVideo = false;
-                     if (vTracks.length > 0) {
-                         const t = vTracks[0];
-                         if (t.enabled && !t.muted && t.readyState === 'live') {
-                             hasActiveVideo = true;
-                         }
-                     }
-
-                     if (hasActiveVideo) {
-                         v.classList.add('active');
-                         v.style.objectFit = 'contain';
-                     } else {
-                         v.classList.remove('active');
-                     }
-                };
-
                 if (event.track.kind === 'video') {
-                     vid.onloadedmetadata = () => checkActive(userId);
-                     vid.onresize = () => checkActive(userId);
+                     vid.onloadedmetadata = () => updatePeerVideoLayout(userId);
+                     screenVid.onloadedmetadata = () => updatePeerVideoLayout(userId);
                 }
 
                 if (!container.dataset.interval) {
-                    const intId = setInterval(() => checkActive(userId), 1000);
+                    const intId = setInterval(() => updatePeerVideoLayout(userId), 1000);
                     container.dataset.interval = intId;
                 }
             };
@@ -1572,15 +1652,17 @@
             }
 
             const vid = document.getElementById(`vid-${userId}`);
-            if (vid) {
-                vid.pause();
-                if (vid.srcObject) {
+            const screenVid = document.getElementById(`screen-${userId}`);
+            [vid, screenVid].forEach(video => {
+                if (!video) return;
+                video.pause();
+                if (video.srcObject) {
                     try {
-                        vid.srcObject.getTracks().forEach(track => track.stop());
+                        video.srcObject.getTracks().forEach(track => track.stop());
                     } catch(e) {}
-                    vid.srcObject = null;
+                    video.srcObject = null;
                 }
-            }
+            });
 
             const el = document.getElementById(`wrapper-${userId}`);
             if (el) {
@@ -1608,6 +1690,8 @@
 
             delete peerMicTrackId[userId];
             delete peerScreenAudioTrackId[userId];
+            delete peerCamVideoTrackId[userId];
+            delete peerScreenVideoTrackId[userId];
             delete pendingCandidates[userId];
             checkEmpty();
         }
@@ -2174,18 +2258,13 @@
                         }
 
                         tracks = localStream.getVideoTracks();
+                        const activeCameraTrack = tracks[0];
+                        if (!activeCameraTrack) throw new Error('Could not initialize camera track');
 
-                        if (!screenStream) {
-                            for (const userId in peers) {
-                                const pc = peers[userId];
-                                const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                                if (sender) {
-                                    sender.replaceTrack(newTrack);
-                                } else {
-                                    pc.addTrack(newTrack, localStream);
-                                }
-                                negotiate(userId, pc);
-                            }
+                        for (const userId in peers) {
+                            const pc = peers[userId];
+                            const negotiationNeeded = addCameraTrackToPeer(pc, activeCameraTrack);
+                            if (negotiationNeeded) negotiate(userId, pc);
                         }
 
                         btn.classList.remove('active-red');
@@ -2200,13 +2279,14 @@
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({
                                 type: 'cam-toggle',
-                                data: { enabled: true }
+                                data: { enabled: true, camVideoTrackId: activeCameraTrack.id }
                             }));
                         }
 
                         pendingCamToggle = false;
 
                         updateLocalAvatar();
+                        updateLocalMediaLayout();
                         savePreferences();
                         return;
                     } catch (e) {
@@ -2225,9 +2305,8 @@
 
                     for (const userId in peers) {
                         const pc = peers[userId];
-                        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                        if (sender) {
-                            pc.removeTrack(sender);
+                        if (removePeerSender(pc, '_cameraVideoSender')) {
+                            negotiate(userId, pc);
                         }
                     }
 
@@ -2248,11 +2327,12 @@
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
                             type: 'cam-toggle',
-                            data: { enabled: false }
+                            data: { enabled: false, camVideoTrackId: null }
                         }));
                     }
 
                     pendingCamToggle = true;
+                    updateLocalMediaLayout();
                 } else {
 
                     btn.classList.remove('active-red');
@@ -2292,17 +2372,12 @@
                             localStream.addTrack(newTrack);
                         }
 
-                        if (!screenStream) {
-                            for (const userId in peers) {
-                                const pc = peers[userId];
-                                const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                                if (sender) {
-                                    sender.replaceTrack(newTrack);
-                                } else {
-                                    pc.addTrack(newTrack, localStream);
-                                }
-                                negotiate(userId, pc);
-                            }
+                        const activeCameraTrack = localStream.getVideoTracks()[0];
+                        if (!activeCameraTrack) throw new Error('Could not initialize camera track');
+                        for (const userId in peers) {
+                            const pc = peers[userId];
+                            const negotiationNeeded = addCameraTrackToPeer(pc, activeCameraTrack);
+                            if (negotiationNeeded) negotiate(userId, pc);
                         }
 
                         btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>`;
@@ -2316,11 +2391,12 @@
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({
                                 type: 'cam-toggle',
-                                data: { enabled: true }
+                                data: { enabled: true, camVideoTrackId: activeCameraTrack.id }
                             }));
                         }
 
                         pendingCamToggle = false;
+                        updateLocalMediaLayout();
                     } catch (e) {
                         console.error("Could not re-add camera", e);
                         alert("Could not access camera. Please check permissions.");
@@ -2375,17 +2451,10 @@
                 videoTrack.stop();
                 localStream.addTrack(newTrack);
 
-                if (!screenStream) {
-                    for (const userId in peers) {
-                        const pc = peers[userId];
-                        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                        if (sender) {
-                            sender.replaceTrack(newTrack);
-                        } else {
-                            pc.addTrack(newTrack, localStream);
-                        }
-                        negotiate(userId, pc);
-                    }
+                for (const userId in peers) {
+                    const pc = peers[userId];
+                    const negotiationNeeded = addCameraTrackToPeer(pc, newTrack);
+                    if (negotiationNeeded) negotiate(userId, pc);
                 }
 
                 const localVideoEl = document.getElementById('localVideo');
@@ -2411,6 +2480,7 @@
                     }
                 }
 
+                updateLocalMediaLayout();
                 savePreferences();
             } catch (e) {
                 console.error("Camera switch failed", e);
@@ -2451,45 +2521,52 @@
             const btn = document.getElementById('btnShare');
 
             if (screenStream) {
-                let videoTrack = localStream ? localStream.getVideoTracks()[0] : null;
-                const screenAudioTrack = screenStream.getAudioTracks()[0];
+                const endingScreenStream = screenStream;
+                const screenTrack = endingScreenStream.getVideoTracks()[0];
+                const screenAudioTrack = endingScreenStream.getAudioTracks()[0];
 
-                screenStream.getTracks().forEach(t => t.stop());
+                // Clear state and UI before stopping tracks. Some browsers fire
+                // `ended` synchronously and would otherwise run this path twice.
                 screenStream = null;
+                endingScreenStream.getTracks().forEach(track => {
+                    track.onended = null;
+                    track.stop();
+                });
                 btn.classList.remove('active-green');
-
-                if (localStream) {
-                    localVideo.srcObject = localStream;
-                } else {
-                    localVideo.srcObject = null;
-                }
+                updateLocalMediaLayout();
 
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'screen-toggle',
-                        data: { enabled: false, hasAudio: false, screenAudioTrackId: null }
+                        data: {
+                            enabled: false,
+                            hasAudio: false,
+                            screenVideoTrackId: null,
+                            screenAudioTrackId: null
+                        }
                     }));
                 }
 
                 for (const userId in peers) {
                     const pc = peers[userId];
-                    const senders = pc.getSenders();
-                    let shouldNegotiate = false;
+                    let shouldNegotiate = removePeerSender(pc, '_screenVideoSender');
 
-                    const vidSender = senders.find(s => s.track && s.track.kind === 'video');
-                    if (vidSender) {
-                        if (videoTrack) {
-                            vidSender.replaceTrack(videoTrack);
-                        } else {
-                            pc.removeTrack(vidSender);
+                    // Fallback for a connection created before sender roles were
+                    // recorded (for example, during a hot reload/reconnect).
+                    if (!shouldNegotiate && screenTrack) {
+                        const sender = pc.getSenders().find(item => item.track === screenTrack);
+                        if (sender) {
+                            pc.removeTrack(sender);
                             shouldNegotiate = true;
                         }
                     }
 
-                    if (screenAudioTrack) {
-                        const audSender = senders.find(s => s.track && s.track.id === screenAudioTrack.id);
-                        if (audSender) {
-                            pc.removeTrack(audSender);
+                    if (removePeerSender(pc, '_screenAudioSender')) {
+                        shouldNegotiate = true;
+                    } else if (screenAudioTrack) {
+                        const sender = pc.getSenders().find(item => item.track === screenAudioTrack);
+                        if (sender) {
+                            pc.removeTrack(sender);
                             shouldNegotiate = true;
                         }
                     }
@@ -2526,14 +2603,18 @@
                     }
                     const screenTrack = screenStream.getVideoTracks()[0];
                     const screenAudioTrack = screenStream.getAudioTracks()[0];
+                    if (!screenTrack) {
+                        screenStream.getTracks().forEach(track => track.stop());
+                        screenStream = null;
+                        throw new Error('The selected source did not provide a screen video track');
+                    }
 
                     if (screenAudioTrack) {
                         screenAudioTrack.contentHint = "music";
                     }
 
-                    localVideo.srcObject = screenStream;
-
                     updateLocalAvatar();
+                    updateLocalMediaLayout();
 
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
@@ -2541,6 +2622,7 @@
                             data: {
                                 enabled: true,
                                 hasAudio: !!screenAudioTrack,
+                                screenVideoTrackId: screenTrack.id,
                                 screenAudioTrackId: screenAudioTrack ? screenAudioTrack.id : null
                             }
                         }));
@@ -2548,23 +2630,11 @@
 
                     for (const userId in peers) {
                         const pc = peers[userId];
-                        const senders = pc.getSenders();
-                        const vidSender = senders.find(s => s.track && s.track.kind === 'video');
-                        let shouldNegotiate = false;
-
-                        if (vidSender) {
-                            vidSender.replaceTrack(screenTrack);
-                        } else {
-                            if (localStream) {
-                                pc.addTrack(screenTrack, localStream);
-                            } else {
-                                pc.addTrack(screenTrack, screenStream);
-                            }
-                            shouldNegotiate = true;
-                        }
+                        let shouldNegotiate = addScreenTrackToPeer(pc, screenTrack);
 
                         if (screenAudioTrack) {
                             let sender = pc.addTrack(screenAudioTrack, screenStream);
+                            pc._screenAudioSender = sender;
 
                             const params = sender.getParameters();
                             if (!params.encodings) params.encodings = [{}];
@@ -2579,7 +2649,11 @@
                         }
                     }
 
-                    screenTrack.onended = () => { toggleScreen(); };
+                    screenTrack.onended = () => {
+                        if (screenStream && screenStream.getVideoTracks().includes(screenTrack)) {
+                            toggleScreen();
+                        }
+                    };
                     btn.classList.add('active-green');
 
                     if (localStream && localStream.getAudioTracks().length > 0) {

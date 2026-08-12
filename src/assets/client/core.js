@@ -49,6 +49,8 @@
         let peerScreenHasAudio = {};
         let peerMicTrackId = {};
         let peerScreenAudioTrackId = {};
+        let peerCamVideoTrackId = {};
+        let peerScreenVideoTrackId = {};
         let pendingCandidates = {};
         const MAX_PENDING_ICE_CANDIDATES = 256;
         let userNickname = "Guest";
@@ -357,15 +359,14 @@
                             if (ws && ws.readyState === WebSocket.OPEN) {
                                 ws.send(JSON.stringify({
                                     type: 'cam-toggle',
-                                    data: { enabled: false }
+                                    data: { enabled: false, camVideoTrackId: null }
                                 }));
                             }
 
                             for (const userId in peers) {
                                 const pc = peers[userId];
-                                const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                                if (sender) {
-                                    pc.removeTrack(sender);
+                                if (removePeerSender(pc, '_cameraVideoSender')) {
+                                    negotiate(userId, pc);
                                 }
                             }
 
@@ -376,6 +377,7 @@
 
                             pendingCamToggle = true;
                             updateLocalAvatar();
+                            updateLocalMediaLayout();
                         }
                     }
                 } else {
@@ -704,6 +706,12 @@
             }
             if (data.screenAudioTrackId !== undefined) {
                 peerScreenAudioTrackId[userId] = data.screenAudioTrackId || null;
+            }
+            if (data.camVideoTrackId !== undefined) {
+                peerCamVideoTrackId[userId] = data.camVideoTrackId || null;
+            }
+            if (data.screenVideoTrackId !== undefined) {
+                peerScreenVideoTrackId[userId] = data.screenVideoTrackId || null;
             }
         }
 
@@ -1484,24 +1492,17 @@
                           if (localVideo) localVideo.srcObject = localStream;
                       }
 
-                      if (!screenStream) {
-                         for (const userId in peers) {
-                            const pc = peers[userId];
-                            const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                            if (sender) {
-                                sender.replaceTrack(newTrack);
-                            } else {
-                                pc.addTrack(newTrack, localStream);
-                                negotiate(userId, pc);
-                            }
-                         }
+                      for (const userId in peers) {
+                         const pc = peers[userId];
+                         const negotiationNeeded = addCameraTrackToPeer(pc, newTrack);
+                         if (negotiationNeeded) negotiate(userId, pc);
+                      }
 
-                         if (ws && ws.readyState === WebSocket.OPEN) {
-                             ws.send(JSON.stringify({
-                                 type: 'cam-toggle',
-                                 data: { enabled: true }
-                             }));
-                         }
+                      if (ws && ws.readyState === WebSocket.OPEN) {
+                          ws.send(JSON.stringify({
+                              type: 'cam-toggle',
+                              data: { enabled: true, camVideoTrackId: newTrack.id }
+                          }));
                       }
 
                       if (currentVideoTrack) {
@@ -1510,6 +1511,7 @@
                       }
 
                       currentVideoInputId = videoId;
+                      updateLocalMediaLayout();
                       const newFacingMode = newTrack.getSettings().facingMode;
                       if (newFacingMode) {
                           currentFacingMode = newFacingMode;
@@ -1605,10 +1607,8 @@
                     if (isCamOn || isScreenOn) {
                         const wrapper = document.getElementById(targetId);
                         if (wrapper) {
-                            const vid = document.getElementById(`vid-${rawUserId}`);
-                            if (vid && vid.classList.contains('active')) {
-                                isVideoActive = true;
-                            }
+                            isVideoActive = wrapper.classList.contains('has-camera') ||
+                                wrapper.classList.contains('has-screen');
                         }
                     }
 
@@ -2613,11 +2613,7 @@
                         }
 
                         if (videoTrack) {
-                            const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
-                            if (sender) {
-                                sender.replaceTrack(videoTrack);
-                            } else {
-                                pc.addTrack(videoTrack, localStream);
+                            if (addCameraTrackToPeer(pc, videoTrack)) {
                                 negotiationNeeded = true;
                             }
                         }
@@ -2634,7 +2630,10 @@
                         }
                         ws.send(JSON.stringify({
                             type: 'cam-toggle',
-                            data: { enabled: isCamOn }
+                            data: {
+                                enabled: isCamOn,
+                                camVideoTrackId: isCamOn ? videoTrack.id : null
+                            }
                         }));
                     }
                 }
@@ -3043,6 +3042,7 @@
 
             updateLocalLabel();
             updateLocalAvatar();
+            updateLocalMediaLayout();
             const btnMic = document.getElementById('btnMic');
             const btnCam = document.getElementById('btnCam');
 

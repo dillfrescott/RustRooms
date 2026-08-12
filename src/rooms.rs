@@ -285,6 +285,18 @@ pub(crate) async fn handle_socket(
                                 .and_then(|d| d.get("screenAudioTrackId"))
                                 .and_then(|v| v.as_str())
                                 .filter(|value| value.len() <= 256);
+                            let cam_video_track_id = parsed
+                                .data
+                                .as_ref()
+                                .and_then(|d| d.get("camVideoTrackId"))
+                                .and_then(|v| v.as_str())
+                                .filter(|value| value.len() <= 256);
+                            let screen_video_track_id = parsed
+                                .data
+                                .as_ref()
+                                .and_then(|d| d.get("screenVideoTrackId"))
+                                .and_then(|v| v.as_str())
+                                .filter(|value| value.len() <= 256);
 
                             let mut is_gif = parsed
                                 .data
@@ -537,6 +549,8 @@ pub(crate) async fn handle_socket(
                                 "screenEnabled": joined_status.is_screen_sharing,
                                 "screenAudio": screen_has_audio,
                                 "micTrackId": mic_track_id,
+                                "camVideoTrackId": cam_video_track_id,
+                                "screenVideoTrackId": screen_video_track_id,
                                 "screenAudioTrackId": screen_audio_track_id,
                                 "isLowBandwidthMode": joined_status.is_low_bandwidth_mode,
                                 "isOnTheGoMode": joined_status.is_on_the_go_mode,

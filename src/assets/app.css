@@ -2021,3 +2021,75 @@
                 opacity: 0;
             }
         }
+
+        /* Camera and screen share occupy one participant card. The shared
+         * screen is the stage; an active camera becomes a compact PiP. */
+        .video-container > .camera-video,
+        .video-container > .screen-video {
+            position: absolute;
+            inset: 0;
+            display: none;
+            width: 100%;
+            height: 100%;
+            background: #050505;
+        }
+        .video-container.has-camera > .camera-video {
+            display: block;
+            object-fit: contain;
+            z-index: 12;
+        }
+        .video-container.has-screen > .screen-video {
+            display: block;
+            object-fit: contain;
+            z-index: 13;
+        }
+        .video-container.has-camera > .avatar-layer,
+        .video-container.has-screen > .avatar-layer {
+            display: none !important;
+        }
+        .video-container.has-screen.has-camera > .camera-video {
+            inset: auto 12px 12px auto;
+            width: clamp(112px, 24%, 220px);
+            height: clamp(84px, 24%, 165px);
+            object-fit: cover;
+            border: 2px solid rgba(255, 255, 255, 0.78);
+            border-radius: var(--radius-lg);
+            box-shadow: 0 10px 32px rgba(0, 0, 0, 0.55);
+            z-index: 22;
+        }
+        .video-container:fullscreen.has-screen.has-camera > .camera-video,
+        .video-container:-webkit-full-screen.has-screen.has-camera > .camera-video {
+            inset: auto 24px 24px auto;
+            width: clamp(180px, 20vw, 360px);
+            height: clamp(130px, 20vh, 260px);
+            object-fit: cover;
+        }
+
+        #localPipWrapper .local-camera-video,
+        #localPipWrapper .local-screen-video {
+            position: absolute;
+            inset: 0;
+            display: none;
+            width: 100%;
+            height: 100%;
+        }
+        #localPipWrapper.has-camera .local-camera-video {
+            display: block;
+            object-fit: cover;
+            z-index: 10;
+        }
+        #localPipWrapper.has-screen .local-screen-video {
+            display: block;
+            object-fit: contain;
+            background: #050505;
+            z-index: 11;
+        }
+        #localPipWrapper.has-screen.has-camera .local-camera-video {
+            inset: auto 6px 6px auto;
+            width: 34%;
+            height: 34%;
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            border-radius: var(--radius-sm);
+            box-shadow: 0 5px 16px rgba(0, 0, 0, 0.5);
+            z-index: 12;
+        }
