@@ -192,15 +192,15 @@
             box-shadow: none;
         }
 
-        /* no-avatar placeholder: frame stays invisible until the VAD
-         * glow animation drives the border color (class-based, not
-         * inline styles, so the speaking glow is no longer hidden) */
+        /* no-avatar placeholder: transparent fill with the same subtle grey
+         * frame as the settings avatar (class-based, not inline styles, so
+         * the speaking glow animation still drives the border color) */
         .avatar-center.avatar-empty {
             background: transparent;
-            border-color: transparent;
+            border: 2px solid var(--border-subtle);
         }
         .avatar-center.avatar-empty:hover {
-            border-color: transparent;
+            border-color: var(--border-strong);
         }
 
         .avatar-center img {
@@ -1209,8 +1209,8 @@
         }
 
         /* top bar and sidebar header match the bottom taskbar height
-         * (52px buttons + 16px/20px vertical padding + 1px border)
-         * so the call view is visually bookended */
+         * on mobile (52px buttons + 16px vertical padding + 1px border);
+         * desktop keeps the slimmer original height */
         .app-topbar,
         .sidebar-header {
             box-sizing: border-box;
@@ -1220,7 +1220,7 @@
         @media (min-width: 768px) {
             .app-topbar,
             .sidebar-header {
-                height: 93px;
+                height: 76px;
             }
         }
 
@@ -1887,7 +1887,7 @@
          * ============================================================ */
         #appLayout main {
             /* faint ink floor so the wash can never bottom out to flat black */
-            background-color: color-mix(in srgb, var(--accent-dark-blue) 5%, transparent);
+            background-color: color-mix(in srgb, var(--accent-dark-blue) 6%, transparent);
             background-image:
                 radial-gradient(color-mix(in srgb, var(--accent) 14%, transparent) 1px, transparent 1.4px),
                 radial-gradient(color-mix(in srgb, var(--accent) 6%, transparent) 1px, transparent 1.4px);
@@ -1897,56 +1897,53 @@
         }
 
         /* subtle full-bleed version of the button marble: two layers of
-         * fine accent bands crossing at an angle, flowing + slowly stirring.
-         * bands only — no blobs, so light levels never visibly cut off */
+         * fine accent bands crossing at an angle. The bands never slide
+         * positionally (that read as a weird parallax/moire shimmer);
+         * instead the whole layer breathes as one via transform, and the
+         * color movement comes from ink.js wandering the accent hues,
+         * which is perfectly smooth. Stops use tiny alpha deltas so no
+         * individual band edge is ever visible */
         #appLayout main::before {
             content: '';
             position: absolute;
-            inset: -60%; /* oversized so the slow stir never exposes edges */
+            inset: -8%; /* slight oversize for the drift; never rotates, so
+                           the layer's rectangular edge can never show */
             background:
                 linear-gradient(115deg,
-                    color-mix(in srgb, var(--accent-dark-blue) 4%, transparent) 0%,
-                    color-mix(in srgb, var(--accent-dark-blue) 8%, transparent) 16%,
-                    color-mix(in srgb, var(--accent) 11%, transparent) 32%,
-                    color-mix(in srgb, var(--accent-blue) 9%, transparent) 48%,
-                    color-mix(in srgb, var(--accent) 10%, transparent) 64%,
-                    color-mix(in srgb, var(--accent-dark-blue) 7%, transparent) 82%,
-                    color-mix(in srgb, var(--accent-dark-blue) 4%, transparent) 100%),
+                    color-mix(in srgb, var(--accent-dark-blue) 5%, transparent) 0%,
+                    color-mix(in srgb, var(--accent-dark-blue) 7%, transparent) 12%,
+                    color-mix(in srgb, var(--accent) 9%, transparent) 25%,
+                    color-mix(in srgb, var(--accent) 10%, transparent) 37%,
+                    color-mix(in srgb, var(--accent-blue) 9%, transparent) 50%,
+                    color-mix(in srgb, var(--accent) 10%, transparent) 62%,
+                    color-mix(in srgb, var(--accent) 8%, transparent) 75%,
+                    color-mix(in srgb, var(--accent-dark-blue) 6%, transparent) 87%,
+                    color-mix(in srgb, var(--accent-dark-blue) 5%, transparent) 100%),
                 linear-gradient(295deg,
-                    color-mix(in srgb, var(--accent-blue) 3%, transparent) 0%,
-                    color-mix(in srgb, var(--accent-blue) 6%, transparent) 22%,
-                    color-mix(in srgb, var(--accent) 9%, transparent) 50%,
-                    color-mix(in srgb, var(--accent-blue) 6%, transparent) 78%,
-                    color-mix(in srgb, var(--accent-blue) 3%, transparent) 100%);
+                    color-mix(in srgb, var(--accent-blue) 4%, transparent) 0%,
+                    color-mix(in srgb, var(--accent-blue) 5%, transparent) 18%,
+                    color-mix(in srgb, var(--accent) 7%, transparent) 36%,
+                    color-mix(in srgb, var(--accent) 8%, transparent) 50%,
+                    color-mix(in srgb, var(--accent) 7%, transparent) 64%,
+                    color-mix(in srgb, var(--accent-blue) 5%, transparent) 82%,
+                    color-mix(in srgb, var(--accent-blue) 4%, transparent) 100%);
             background-size: 340% 340%, 260% 260%;
-            animation:
-                call-ink-flow 44s ease-in-out infinite,
-                call-ink-stir 110s linear infinite;
+            animation: call-ink-breathe 26s ease-in-out infinite;
             pointer-events: none;
             z-index: 0;
         }
 
-        @keyframes call-ink-flow {
-            0% {
-                background-position: 0% 40%, 100% 55%;
-            }
-            33% {
-                background-position: 65% 75%, 35% 20%;
-            }
-            66% {
-                background-position: 35% 10%, 65% 90%;
-            }
-            100% {
-                background-position: 0% 40%, 100% 55%;
-            }
-        }
-
-        /* gentle vignette to focus the participant grid */
+        /* gentle vignette to focus the participant grid — kept light so
+         * corners never read as solid black against the ink wash.
+         * a faint static noise layer dithers the wash underneath so
+         * 8-bit gradient banding can't appear as it moves */
         #appLayout main::after {
             content: '';
             position: absolute;
             inset: 0;
-            background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.38) 100%);
+            background:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E"),
+                radial-gradient(120% 90% at 50% 45%, transparent 60%, rgba(0, 0, 0, 0.18) 100%);
             pointer-events: none;
             z-index: 0;
         }
@@ -1959,15 +1956,20 @@
             z-index: 1;
         }
 
-        @keyframes call-ink-stir {
+        /* gentle breathing drift — scale never drops below 1 and the
+         * translate stays within the -8% oversize, so no edge can show */
+        @keyframes call-ink-breathe {
             0% {
-                transform: rotate(0deg) scale(1);
+                transform: scale(1) translate(0%, 0%);
             }
-            50% {
-                transform: rotate(180deg) scale(1.12);
+            33% {
+                transform: scale(1.06) translate(2%, -1.5%);
+            }
+            66% {
+                transform: scale(1.04) translate(-1.5%, 2%);
             }
             100% {
-                transform: rotate(360deg) scale(1);
+                transform: scale(1) translate(0%, 0%);
             }
         }
 
