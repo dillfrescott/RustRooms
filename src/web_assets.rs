@@ -46,7 +46,7 @@ pub(crate) async fn manifest_json() -> impl IntoResponse {
 
 pub(crate) async fn service_worker_js() -> impl IntoResponse {
     let sw = r##"
-const CACHE_NAME = 'rustrooms-v2';
+const CACHE_NAME = 'rustrooms-v3';
 const ASSETS = [
     '/icon.svg',
     '/rnnoise.js',
@@ -229,12 +229,14 @@ pub(crate) async fn app_js() -> impl IntoResponse {
         let turn_credential =
             serde_json::to_string(&turn_credential).unwrap_or_else(|_| "\"\"".to_string());
         concat!(
+            include_str!("assets/client/ink.js"),
             include_str!("assets/client/gifenc.js"),
             include_str!("assets/client/gif_resize.js"),
             include_str!("assets/client/core.js"),
             include_str!("assets/client/interface.js"),
             include_str!("assets/client/connection.js"),
             include_str!("assets/client/settings.js"),
+            include_str!("assets/client/globe.js"),
         )
         .replace("{{TURN_URL}}", &turn_url)
         .replace("{{TURN_USERNAME}}", &turn_username)

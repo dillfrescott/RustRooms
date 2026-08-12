@@ -1173,7 +1173,7 @@
                     userDiv.className = 'flex flex-col items-center gap-2 p-3 rounded-2xl bg-zinc-900/50 border border-zinc-800 min-w-[100px]';
                     userDiv.innerHTML = `
                         <div class="w-12 h-12 rounded-xl overflow-hidden bg-zinc-800 border border-zinc-700">
-                            ${u.avatar ? `<img src="${escapeHtml(u.staticFrame || u.avatar)}" class="w-full h-full object-cover">` : `<div class="w-full h-full flex items-center justify-center text-xl">👤</div>`}
+                            ${u.avatar ? `<img src="${escapeHtml(u.staticFrame || u.avatar)}" class="w-full h-full object-cover">` : `<div class="w-full h-full flex items-center justify-center"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg></div>`}
                         </div>
                         <span class="text-xs font-semibold text-zinc-300 truncate max-w-[80px]">${escapeHtml(u.nickname)}</span>
                     `;

@@ -606,19 +606,17 @@
                layer.appendChild(centerDiv);
            } else {
                const centerDiv = document.createElement('div');
-               centerDiv.className = 'avatar-center';
-               centerDiv.style.background = 'transparent';
-               centerDiv.style.border = 'none';
+               centerDiv.className = 'avatar-center avatar-empty';
 
                const text = document.createElement('div');
-               text.className = 'text-6xl';
                text.style.display = 'flex';
                text.style.alignItems = 'center';
                text.style.justifyContent = 'center';
                text.style.width = '100%';
                text.style.height = '100%';
                text.style.margin = '0';
-               text.innerText = '👤';
+               text.style.color = 'var(--text-muted)';
+               text.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="60" height="60"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg>';
 
                centerDiv.appendChild(text);
                layer.appendChild(centerDiv);
