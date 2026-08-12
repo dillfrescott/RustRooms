@@ -85,6 +85,12 @@
             filter: none;
         }
 
+        /* Keep every button state solid, including Tailwind shadow utilities. */
+        button,
+        button:hover {
+            box-shadow: none !important;
+        }
+
         ::selection {
             background: var(--accent);
             color: #ffffff;
@@ -667,17 +673,33 @@
             }
         }
 
+        @keyframes vad-glow-pulse {
+            0%, 100% {
+                border-color: var(--accent);
+            }
+            50% {
+                border-color: var(--accent-blue);
+            }
+        }
+
         .speaking-glow {
-            border: 3px solid var(--accent) !important;
-            box-shadow: 0 0 12px 4px var(--accent-glow) !important;
+            border: 3px solid var(--accent);
+            box-shadow: none !important;
+            animation: vad-glow-pulse 1.8s ease-in-out infinite;
             transition: all 0.15s ease;
             z-index: 50;
         }
 
         #localPipWrapper.speaking-glow {
-            border: 2px solid var(--accent) !important;
-            box-shadow: 0 0 10px 3px var(--accent-glow) !important;
+            border: 2px solid var(--accent);
+            box-shadow: none !important;
             z-index: 75;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .speaking-glow {
+                animation: none;
+            }
         }
 
         .video-container {
@@ -1243,14 +1265,14 @@
                 border-color: var(--accent);
                 background: rgba(99, 102, 241, 0.05);
                 transform: translateY(-2px);
-                box-shadow: 0 0 12px 3px var(--accent-glow);
+                box-shadow: none;
             }
         }
 
         .room-item.active {
-            border-color: var(--accent);
+            border: 2px solid var(--accent);
             background: rgba(99, 102, 241, 0.08);
-            box-shadow: 0 0 14px 4px var(--accent-glow), 0 0 0 1px var(--border-accent);
+            box-shadow: none;
         }
 
         .room-name {
@@ -1313,8 +1335,8 @@
         }
 
         .mini-avatar.speaking-glow {
-            border: 2px solid var(--accent) !important;
-            box-shadow: 0 0 8px 3px var(--accent-glow) !important;
+            border: 2px solid var(--accent);
+            box-shadow: none !important;
             transition: all 0.15s ease;
         }
 
@@ -1559,17 +1581,11 @@
         }
 
         @keyframes otg-pulse {
-            0% {
+            0%, 100% {
                 transform: scale(1.02);
-                box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5);
             }
             70% {
                 transform: scale(1.08);
-                box-shadow: 0 0 0 15px rgba(99, 102, 241, 0);
-            }
-            100% {
-                transform: scale(1.02);
-                box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
             }
         }
         .otg-speaking-pulse {
