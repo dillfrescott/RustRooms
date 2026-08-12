@@ -197,6 +197,7 @@
 
         (function() {
             const pip = document.getElementById('localPipWrapper');
+            const topbar = document.querySelector('.app-topbar');
             const taskbar = document.querySelector('.taskbar');
             const connectionDot = document.getElementById('connectionDot');
             const btnCopy = document.getElementById('btnCopy');
@@ -216,6 +217,7 @@
                 pip.style.transition = 'none';
 
                 const rect = pip.getBoundingClientRect();
+                const topbarRect = topbar.getBoundingClientRect();
                 const taskbarRect = taskbar.getBoundingClientRect();
                 const sidebarRect = sidebar && sidebar.classList.contains('open') ? sidebar.getBoundingClientRect() : null;
 
@@ -239,8 +241,8 @@
                 dragBounds = {
                     minX: minX,
                     maxX: maxX,
-                    minY: 16,
-                    maxY: window.innerHeight - taskbarRect.height - rect.height - 16
+                    minY: topbarRect.bottom + 16,
+                    maxY: taskbarRect.top - rect.height - 16
                 };
 
                 const margin = 16;
