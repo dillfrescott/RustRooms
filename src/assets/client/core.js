@@ -40,6 +40,8 @@
         let wsUrl = roomId ? `${wsProtocol}//${window.location.host}/ws/${encodeURIComponent(roomId)}/${encodeURIComponent(channelId)}` : '';
 
         const isIOS = (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const clientUserAgent = navigator.userAgent || navigator.vendor || window.opera || '';
+        const isMobileClient = /Mobile|Android|Silk/.test(clientUserAgent) || isIOS;
         let ws;
         let localStream;
         let screenStream;
@@ -78,6 +80,8 @@
         let workletLoadingPromise = null;
         let isLowBandwidthMode = false;
         let isOnTheGoMode = false;
+        const reducedMotionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+        let isReducedMotion = reducedMotionPreference.matches;
         let activeSpeakers = {};
         let peerLowBandwidthStatus = {};
         let peerOnTheGoStatus = {};
@@ -2225,7 +2229,7 @@
         // (enterprise AnimationPolicy etc.); falls back to the plain img src
         // swap when ImageDecoder is unavailable.
         let gifAnimators = {};
-        const avatarMotionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const avatarMotionPreference = reducedMotionPreference;
 
         function stopGifFrameAnimation(targetId) {
             const entry = gifAnimators[targetId];
@@ -2443,10 +2447,25 @@
             });
         }
 
+        function handleReducedMotionPreferenceChange(event) {
+            isReducedMotion = event.matches;
+            stopAvatarMotionWhenReduced();
+
+            // This preference belongs to the current device rather than the
+            // saved RustRooms profile. Publish changes immediately so the
+            // channel sidebar remains accurate without requiring a reconnect.
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'update-user',
+                    data: { isReducedMotion: isReducedMotion, profileRev: profileRev }
+                }));
+            }
+        }
+
         if (avatarMotionPreference.addEventListener) {
-            avatarMotionPreference.addEventListener('change', stopAvatarMotionWhenReduced);
+            avatarMotionPreference.addEventListener('change', handleReducedMotionPreferenceChange);
         } else {
-            avatarMotionPreference.addListener(stopAvatarMotionWhenReduced);
+            avatarMotionPreference.addListener(handleReducedMotionPreferenceChange);
         }
 
         let isPreviewStarting = false;

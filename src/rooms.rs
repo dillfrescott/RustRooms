@@ -261,6 +261,20 @@ pub(crate) async fn handle_socket(
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false);
 
+                            let is_reduced_motion = parsed
+                                .data
+                                .as_ref()
+                                .and_then(|d| d.get("isReducedMotion"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+
+                            let is_mobile = parsed
+                                .data
+                                .as_ref()
+                                .and_then(|d| d.get("isMobile"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+
                             let cam_enabled = parsed
                                 .data
                                 .as_ref()
@@ -426,6 +440,8 @@ pub(crate) async fn handle_socket(
                                     is_screen_sharing,
                                     is_low_bandwidth_mode,
                                     is_on_the_go_mode,
+                                    is_reduced_motion,
+                                    is_mobile,
                                     profile_rev,
                                 };
                                 joined_status = reconcile_join_status(
@@ -483,6 +499,8 @@ pub(crate) async fn handle_socket(
                                                             "isScreenSharing": status.is_screen_sharing,
                                                             "isLowBandwidthMode": status.is_low_bandwidth_mode,
                                                             "isOnTheGoMode": status.is_on_the_go_mode,
+                                                            "isReducedMotion": status.is_reduced_motion,
+                                                            "isMobile": status.is_mobile,
                                                             "profileRev": status.profile_rev
                                                         }
                                                     }));
@@ -509,6 +527,8 @@ pub(crate) async fn handle_socket(
                                                             "isScreenSharing": status.is_screen_sharing,
                                                             "isLowBandwidthMode": status.is_low_bandwidth_mode,
                                                             "isOnTheGoMode": status.is_on_the_go_mode,
+                                                            "isReducedMotion": status.is_reduced_motion,
+                                                            "isMobile": status.is_mobile,
                                                             "profileRev": status.profile_rev
                                                         }
                                                     }));
@@ -554,6 +574,8 @@ pub(crate) async fn handle_socket(
                                 "screenAudioTrackId": screen_audio_track_id,
                                 "isLowBandwidthMode": joined_status.is_low_bandwidth_mode,
                                 "isOnTheGoMode": joined_status.is_on_the_go_mode,
+                                "isReducedMotion": joined_status.is_reduced_motion,
+                                "isMobile": joined_status.is_mobile,
                                 "profileRev": joined_status.profile_rev,
                                 "createdAt": created_at
                             }));
@@ -721,6 +743,12 @@ pub(crate) async fn handle_socket(
                                                     d.get("isOnTheGoMode").and_then(|v| v.as_bool())
                                                 {
                                                     status.is_on_the_go_mode = otg;
+                                                }
+                                                if let Some(reduced_motion) = d
+                                                    .get("isReducedMotion")
+                                                    .and_then(|v| v.as_bool())
+                                                {
+                                                    status.is_reduced_motion = reduced_motion;
                                                 }
                                                 if status.avatar.is_none() {
                                                     status.is_gif = false;

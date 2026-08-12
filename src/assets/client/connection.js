@@ -101,6 +101,8 @@
                                     isDeafened: isDeafened,
                                     isLowBandwidthMode: isLowBandwidthMode,
                                     isOnTheGoMode: isOnTheGoMode,
+                                    isReducedMotion: isReducedMotion,
+                                    isMobile: isMobileClient,
                                     password: roomCreationPassword
                                 }
                             }));
@@ -263,7 +265,9 @@
                                                 isMuted: myMuted,
                                                 isDeafened: isDeafened,
                                                 isLowBandwidthMode: isLowBandwidthMode,
-                                                isOnTheGoMode: isOnTheGoMode
+                                                isOnTheGoMode: isOnTheGoMode,
+                                                isReducedMotion: isReducedMotion,
+                                                isMobile: isMobileClient
                                             }
                                         }));
                                     } catch (e) { console.error("Error processing user-joined:", e); }
@@ -2504,11 +2508,7 @@
         }
 
         function isMobileDevice() {
-            const ua = navigator.userAgent || navigator.vendor || window.opera;
-            const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-            const isAndroid = /Android/.test(ua);
-            const isMobile = /Mobile|Android|Silk/.test(ua) || isIOS || isAndroid;
-            return isMobile;
+            return isMobileClient;
         }
 
         async function toggleScreen() {
