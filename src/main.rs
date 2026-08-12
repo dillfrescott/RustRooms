@@ -19,6 +19,10 @@ use uuid::Uuid;
 use web_assets::*;
 #[tokio::main]
 async fn main() {
+    // Install the provider before any rediss:// connection initializes rustls.
+    // This is explicit because redis's rustls feature does not select one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let rooms: RoomMap = Arc::new(Mutex::new(HashMap::new()));
     let room_cleanup_generations: RoomCleanupMap = Arc::new(Mutex::new(HashMap::new()));
     let channel_creation_times: ChannelCreationTimesMap = Arc::new(Mutex::new(HashMap::new()));

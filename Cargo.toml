@@ -13,5 +13,8 @@ uuid = { version = "1.21.0", features = ["v4"] }
 futures = "0.3.32"
 url = "2.5"
 redis = { version = "0.32", features = ["tokio-comp", "tokio-rustls-comp"] }
+# redis enables rustls without choosing a process-level crypto provider.
+# Select one explicitly so rediss:// connections cannot panic at runtime.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 
