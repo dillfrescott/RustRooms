@@ -1208,23 +1208,19 @@
             }
         }
 
+        /* top bar and sidebar header match the bottom taskbar height
+         * (52px buttons + 16px/20px vertical padding + 1px border)
+         * so the call view is visually bookended */
         .app-topbar,
         .sidebar-header {
             box-sizing: border-box;
-            height: 52px;
-        }
-
-        @media (min-width: 640px) {
-            .app-topbar,
-            .sidebar-header {
-                height: 60px;
-            }
+            height: 85px;
         }
 
         @media (min-width: 768px) {
             .app-topbar,
             .sidebar-header {
-                height: 76px;
+                height: 93px;
             }
         }
 

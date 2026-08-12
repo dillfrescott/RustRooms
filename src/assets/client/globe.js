@@ -88,10 +88,11 @@
         canvas.height = Math.round(H * dpr);
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         // offset right + oversized so the globe bleeds off the page edge
+        // (pushed even farther right and larger on narrow phone screens)
         const wide = W >= 768;
-        cx = W * (wide ? 0.74 : 0.6);
+        cx = W * (wide ? 0.74 : 0.85);
         cy = H * 0.5;
-        R = Math.max(140, Math.min(W, H) * (wide ? 0.58 : 0.52));
+        R = Math.max(140, Math.min(W, H) * (wide ? 0.58 : 0.8));
     }
     window.addEventListener('resize', resize);
 
