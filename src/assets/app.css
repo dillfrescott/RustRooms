@@ -1391,7 +1391,10 @@
             border-radius: 4px;
             color: #a1a1aa;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
-            z-index: 3;
+            /* Stay above the mini-avatar even while speaking: .speaking-glow
+             * raises the avatar to z-index 50, so the badge must top that to
+             * keep the device indicator visible over the image and VAD ring. */
+            z-index: 60;
             pointer-events: none;
         }
 
