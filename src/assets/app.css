@@ -706,7 +706,7 @@
 
         /* The empty-avatar rule has greater specificity than .speaking-glow.
          * Override it explicitly so Safari still paints the VAD border when
-         * there is no image (especially when reduced motion is enabled). */
+         * there is no image. */
         .avatar-center.avatar-empty.speaking-glow {
             border: 3px solid var(--accent);
         }
@@ -714,15 +714,6 @@
         #localPipWrapper.speaking-glow {
             border: 2px solid var(--accent);
             z-index: 75;
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            .speaking-glow {
-                animation: none;
-                border-color: var(--accent);
-                box-shadow: 0 0 16px 3px var(--accent-glow),
-                    inset 0 0 14px 0 var(--accent-glow);
-            }
         }
 
         .video-container {
@@ -1341,6 +1332,12 @@
             gap: 6px;
         }
 
+        .user-avatar-wrap {
+            position: relative;
+            display: flex;
+            flex-shrink: 0;
+        }
+
         .mini-avatar {
             position: relative;
             width: 26px;
@@ -1348,7 +1345,6 @@
             border-radius: var(--radius-sm);
             background: var(--bg-primary);
             border: 1px solid var(--border-subtle);
-            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1366,6 +1362,7 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
+            border-radius: var(--radius-sm);
         }
 
         .mini-avatar-placeholder {
@@ -1378,6 +1375,24 @@
             border: 2px solid var(--accent);
             box-shadow: none !important;
             transition: all 0.15s ease;
+        }
+
+        .device-badge {
+            position: absolute;
+            right: -5px;
+            bottom: -5px;
+            width: 11px;
+            height: 11px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 4px;
+            color: #a1a1aa;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+            z-index: 3;
+            pointer-events: none;
         }
 
         .sidebar-overlay {
@@ -1832,15 +1847,6 @@
             }
         }
 
-        @media (prefers-reduced-motion: reduce) {
-            .btn-primary {
-                animation: none;
-            }
-            .btn-primary:not(.btn-danger)::after {
-                animation: none;
-            }
-        }
-
         /* Map Tailwind indigo utilities onto the living accent */
         .bg-indigo-500 {
             background-color: var(--accent) !important;
@@ -2018,35 +2024,6 @@
             100% {
                 transform: scale(2.4);
                 opacity: 0;
-            }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            #appLayout main::before {
-                animation: none;
-            }
-            #emptyState > div:first-child::before,
-            #emptyState > div:first-child::after {
-                animation: none;
-                opacity: 0;
-            }
-
-            /* Stop all remaining decorative CSS motion throughout the app.
-             * Statuses remain visible through their static colors/borders. */
-            *,
-            *::before,
-            *::after {
-                animation: none !important;
-                transition: none !important;
-                scroll-behavior: auto !important;
-            }
-
-            #globeCanvas {
-                cursor: default;
-            }
-
-            .otg-rotate-anim {
-                transform: rotate(-90deg);
             }
         }
 

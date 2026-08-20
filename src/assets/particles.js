@@ -1,8 +1,6 @@
 (function () {
     'use strict';
 
-    const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
-
     function setupParticleCanvas(canvasId, overlayId) {
         const canvas = document.getElementById(canvasId);
         const overlay = document.getElementById(overlayId);
@@ -71,7 +69,7 @@
         }
 
         function animate() {
-            if (motionPreference.matches || document.hidden) {
+            if (document.hidden) {
                 animationId = null;
                 drawParticles(false);
                 return;
@@ -93,10 +91,7 @@
                 return;
             }
 
-            if (motionPreference.matches) {
-                stopAnimation();
-                drawParticles(false);
-            } else if (animationId === null) {
+            if (animationId === null) {
                 animate();
             }
         }
@@ -112,12 +107,6 @@
         const observer = new MutationObserver(checkVisibility);
         observer.observe(overlay, { attributes: true, attributeFilter: ['style', 'class'] });
         document.addEventListener('visibilitychange', checkVisibility);
-
-        if (motionPreference.addEventListener) {
-            motionPreference.addEventListener('change', checkVisibility);
-        } else {
-            motionPreference.addListener(checkVisibility);
-        }
     }
 
     setupParticleCanvas('particleCanvas', 'welcomeOverlay');

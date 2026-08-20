@@ -14,7 +14,6 @@ pub(crate) fn distributed_user_data(status: &UserStatus, created_at: u64) -> ser
         "screenEnabled": status.is_screen_sharing,
         "isLowBandwidthMode": status.is_low_bandwidth_mode,
         "isOnTheGoMode": status.is_on_the_go_mode,
-        "isReducedMotion": status.is_reduced_motion,
         "isMobile": status.is_mobile,
         "profileRev": status.profile_rev,
         "createdAt": created_at,
@@ -913,7 +912,6 @@ fn presence_status(status: &UserStatus) -> UserStatus {
         is_screen_sharing: status.is_screen_sharing,
         is_low_bandwidth_mode: status.is_low_bandwidth_mode,
         is_on_the_go_mode: status.is_on_the_go_mode,
-        is_reduced_motion: status.is_reduced_motion,
         is_mobile: status.is_mobile,
         profile_rev: status.profile_rev,
     }
@@ -1040,7 +1038,6 @@ mod tests {
             is_screen_sharing: false,
             is_low_bandwidth_mode: false,
             is_on_the_go_mode: false,
-            is_reduced_motion: false,
             is_mobile: false,
             profile_rev: 0,
         }
@@ -1110,7 +1107,6 @@ mod tests {
         status.is_gif = true;
         status.is_muted = true;
         status.is_screen_sharing = true;
-        status.is_reduced_motion = true;
         status.is_mobile = true;
 
         let presence = presence_status(&status);
@@ -1123,7 +1119,6 @@ mod tests {
         assert!(presence.is_screen_sharing);
         assert!(presence.is_low_bandwidth_mode == status.is_low_bandwidth_mode);
         assert!(presence.is_on_the_go_mode == status.is_on_the_go_mode);
-        assert!(presence.is_reduced_motion);
         assert!(presence.is_mobile);
     }
 

@@ -101,7 +101,6 @@
                                     isDeafened: isDeafened,
                                     isLowBandwidthMode: isLowBandwidthMode,
                                     isOnTheGoMode: isOnTheGoMode,
-                                    isReducedMotion: isReducedMotion,
                                     isMobile: isMobileClient,
                                     password: roomCreationPassword
                                 }
@@ -266,7 +265,6 @@
                                                 isDeafened: isDeafened,
                                                 isLowBandwidthMode: isLowBandwidthMode,
                                                 isOnTheGoMode: isOnTheGoMode,
-                                                isReducedMotion: isReducedMotion,
                                                 isMobile: isMobileClient
                                             }
                                         }));

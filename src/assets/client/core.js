@@ -80,8 +80,6 @@
         let workletLoadingPromise = null;
         let isLowBandwidthMode = false;
         let isOnTheGoMode = false;
-        const reducedMotionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
-        let isReducedMotion = reducedMotionPreference.matches;
         let activeSpeakers = {};
         let peerLowBandwidthStatus = {};
         let peerOnTheGoStatus = {};
@@ -2229,7 +2227,6 @@
         // (enterprise AnimationPolicy etc.); falls back to the plain img src
         // swap when ImageDecoder is unavailable.
         let gifAnimators = {};
-        const avatarMotionPreference = reducedMotionPreference;
 
         function stopGifFrameAnimation(targetId) {
             const entry = gifAnimators[targetId];
@@ -2260,7 +2257,7 @@
 
         function startGifFrameAnimation(targetId, avatar, centerEl, centerImg) {
             stopGifFrameAnimation(targetId);
-            if (avatarMotionPreference.matches || !avatar || !centerEl) return;
+            if (!avatar || !centerEl) return;
             const canvas = document.createElement('canvas');
             canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;';
             centerEl.appendChild(canvas);
@@ -2326,7 +2323,6 @@
         function loopGifInElement(imgEl, gifSrc) {
             if (!imgEl || !gifSrc) return;
             stopGifPreviewLoop(imgEl);
-            if (avatarMotionPreference.matches) return;
             const container = imgEl.parentElement;
             if (!container) return;
             const key = 'preview-' + (++gifPreviewSeq);
@@ -2364,7 +2360,6 @@
         }
 
         function toggleGifAnimation(targetId, isSpeaking) {
-            if (isSpeaking && avatarMotionPreference.matches) isSpeaking = false;
             if (targetId === 'local') {
                 if (!userAvatarIsGif || !userAvatar) return;
                 const centerImg = document.getElementById('localAvatarCenterImg');
@@ -2436,36 +2431,6 @@
                     sidebarImg.src = sidebarImg.dataset.staticSrc;
                 }
             }
-        }
-
-        function stopAvatarMotionWhenReduced() {
-            if (!avatarMotionPreference.matches) return;
-            Object.keys(gifAnimators).forEach(stopGifFrameAnimation);
-            document.querySelectorAll('[data-gif-loop-key]').forEach(stopGifPreviewLoop);
-            document.querySelectorAll('img[data-static-src]').forEach((img) => {
-                img.src = img.dataset.staticSrc;
-            });
-        }
-
-        function handleReducedMotionPreferenceChange(event) {
-            isReducedMotion = event.matches;
-            stopAvatarMotionWhenReduced();
-
-            // This preference belongs to the current device rather than the
-            // saved RustRooms profile. Publish changes immediately so the
-            // channel sidebar remains accurate without requiring a reconnect.
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    type: 'update-user',
-                    data: { isReducedMotion: isReducedMotion, profileRev: profileRev }
-                }));
-            }
-        }
-
-        if (avatarMotionPreference.addEventListener) {
-            avatarMotionPreference.addEventListener('change', handleReducedMotionPreferenceChange);
-        } else {
-            avatarMotionPreference.addListener(handleReducedMotionPreferenceChange);
         }
 
         let isPreviewStarting = false;

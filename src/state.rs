@@ -20,8 +20,6 @@ pub(crate) struct UserStatus {
     #[serde(default)]
     pub is_on_the_go_mode: bool,
     #[serde(default)]
-    pub is_reduced_motion: bool,
-    #[serde(default)]
     pub is_mobile: bool,
     // Monotonic revision counter for the persisted profile (nickname, avatar,
     // modes). The client bumps it on every local save and sends it with join
@@ -201,9 +199,6 @@ pub(crate) fn reconcile_join_status(
             is_screen_sharing: client_status.is_screen_sharing,
             is_low_bandwidth_mode: prev.is_low_bandwidth_mode,
             is_on_the_go_mode: prev.is_on_the_go_mode,
-            // Reduced motion follows the current device/OS preference rather
-            // than the stored profile from a previous connection.
-            is_reduced_motion: client_status.is_reduced_motion,
             is_mobile: client_status.is_mobile,
             profile_rev: prev.profile_rev,
         },
@@ -304,7 +299,6 @@ mod tests {
             is_screen_sharing: false,
             is_low_bandwidth_mode: false,
             is_on_the_go_mode: false,
-            is_reduced_motion: false,
             is_mobile: false,
             profile_rev: rev,
         }
@@ -359,17 +353,6 @@ mod tests {
         assert_eq!(resolved.nickname, "Lisa");
         // Per-connection state always reflects the new connection.
         assert!(!resolved.is_screen_sharing);
-    }
-
-    #[test]
-    fn stale_reconnect_adopts_current_reduced_motion_preference() {
-        let mut server = test_status("Lisa", 5);
-        server.is_reduced_motion = false;
-        let mut client = test_status("Guest", 0);
-        client.is_reduced_motion = true;
-
-        let resolved = reconcile_join_status(Some(&server), client);
-        assert!(resolved.is_reduced_motion);
     }
 
     #[test]
