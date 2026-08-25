@@ -1,7 +1,7 @@
-use crate::{rooms::handle_socket, state::*, web_assets::get_html_page};
+use crate::{rooms::handle_socket, state::*, web_assets::render_html_page};
 use axum::{
     extract::{Path, Query, State, ws::WebSocketUpgrade},
-    http::header,
+    http::{header, uri::Authority, Uri},
     response::{Html, IntoResponse, Redirect},
 };
 use std::collections::HashMap;
@@ -146,9 +146,62 @@ pub(crate) async fn redirect_ws_trailing_slash(
     }
 }
 
+/// Origin scheme for absolute embed URLs: honor a reverse proxy's
+/// `X-Forwarded-Proto`, then fall back to https (production default).
+fn request_scheme(headers: &axum::http::HeaderMap) -> &'static str {
+    match headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(proto) if proto.eq_ignore_ascii_case("http") => "http",
+        Some(_) => "https",
+        None => "https",
+    }
+}
+
+/// Build an absolute origin (scheme + authority) for embed URLs.
+fn embed_origin(headers: &axum::http::HeaderMap, authority: &Authority) -> String {
+    format!("{}://{}", request_scheme(headers), authority)
+}
+
+/// Open Graph / Twitter Card tags for the landing page.
+fn base_social_meta(origin: &str) -> String {
+    let icon = format!("{}/icon.svg", origin);
+    format!(
+        r##"<meta property="og:site_name" content="RustRooms">
+<meta property="og:type" content="website">
+<meta property="og:title" content="RustRooms">
+<meta property="og:description" content="Simple, secure, and fast video conferencing. Create a room, share the link, and you're talking in seconds — no account, no downloads.">
+<meta property="og:image" content="{icon}">
+<meta property="og:url" content="{origin}/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="RustRooms">
+<meta name="twitter:description" content="Simple, secure, and fast video conferencing. Create a room, share the link, and you're talking in seconds.">
+<meta name="twitter:image" content="{icon}">"##
+    )
+}
+
+/// Open Graph / Twitter Card tags for a call (room/channel) link.
+fn call_social_meta(origin: &str, path: &str) -> String {
+    let icon = format!("{}/icon.svg", origin);
+    format!(
+        r##"<meta property="og:site_name" content="RustRooms">
+<meta property="og:type" content="website">
+<meta property="og:title" content="You're invited to a RustRooms call">
+<meta property="og:description" content="Tap to join the call — no sign-up, no downloads, just your browser.">
+<meta property="og:image" content="{icon}">
+<meta property="og:url" content="{origin}{path}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="You're invited to a RustRooms call">
+<meta name="twitter:description" content="Tap to join the call — no sign-up, no downloads, just your browser.">
+<meta name="twitter:image" content="{icon}">"##
+    )
+}
+
 pub(crate) async fn index(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    uri: Uri,
 ) -> axum::response::Response {
     if let Some(ref allowed_url) = state.allowed_url
         && !host_is_allowed(&headers, allowed_url)
@@ -156,7 +209,23 @@ pub(crate) async fn index(
         return (axum::http::StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
 
-    let html = get_html_page();
+    // Any path deeper than "/" is a call link (room or room/channel).
+    let path = uri.path();
+    let is_call_link = path.trim_matches('/') != "";
+
+    let (page_title, meta_tags) = match (is_call_link, request_authority(&headers)) {
+        (false, Some(authority)) => {
+            let origin = embed_origin(&headers, &authority);
+            ("RustRooms", base_social_meta(&origin))
+        }
+        (true, Some(authority)) => {
+            let origin = embed_origin(&headers, &authority);
+            ("Join the call — RustRooms", call_social_meta(&origin, path))
+        }
+        _ => ("RustRooms", String::new()),
+    };
+
+    let html = render_html_page(&page_title, &meta_tags);
 
     let csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; script-src-elem 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https: blob:; connect-src 'self' wss: ws:; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none';".to_string();
 
