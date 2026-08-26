@@ -3007,7 +3007,7 @@
                     channelId = '';
                     history.replaceState(null, '', '/');
                     document.title = 'RustRooms';
-                    document.getElementById('welcomeOverlay').style.display = 'flex';
+                    showWelcome();
                     document.querySelector('main').style.display = 'none';
                     document.querySelector('.taskbar').style.display = 'none';
                     const configOverlay = document.getElementById('configOverlay');
@@ -3043,9 +3043,13 @@
             previewVideo.srcObject = null;
 
             if (setupMeterFrameId) cancelAnimationFrame(setupMeterFrameId);
-            configOverlay.classList.add('opacity-0', 'pointer-events-none');
+            const configPanel = document.getElementById('configPanel');
+            if (configPanel) configPanel.classList.add('panel-pop-away');
+            configOverlay.classList.remove('overlay-enter');
+            configOverlay.classList.add('opacity-0', 'pointer-events-none', 'overlay-exit');
             setTimeout(() => {
                 configOverlay.style.display = 'none';
+                if (configPanel) configPanel.classList.remove('panel-pop-away');
                 appLayout.classList.remove('hidden');
                 appLayout.classList.add('flex');
                 document.getElementById('sidebarToggle').classList.remove('hidden');

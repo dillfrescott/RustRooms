@@ -114,7 +114,78 @@
             }
         });
 
-        const welcomeOverlay = document.getElementById('welcomeOverlay');
+        /* ============================================================
+         * Shared transition helpers — polished pop up / pop away.
+         * Every overlay/panel in the app funnels through these so the
+         * entrances and exits stay consistent.
+         * ============================================================ */
+        const OVERLAY_MS = 300;
+        let _welcomeHideTimer = null;
+
+        // Fade the whole welcome screen in; children (title, subtitle,
+        // start button) replay their staggered blur-pop automatically
+        // because the overlay goes from display:none to visible.
+        function showWelcome() {
+            clearTimeout(_welcomeHideTimer);
+            const overlay = document.getElementById('welcomeOverlay');
+            if (!overlay) return;
+            overlay.classList.remove('welcome-exit');
+            overlay.style.display = 'flex';
+            requestAnimationFrame(() => overlay.classList.add('welcome-enter'));
+        }
+
+        function hideWelcome() {
+            clearTimeout(_welcomeHideTimer);
+            const overlay = document.getElementById('welcomeOverlay');
+            if (!overlay) return;
+            overlay.classList.remove('welcome-enter');
+            overlay.classList.add('welcome-exit');
+            _welcomeHideTimer = setTimeout(() => {
+                overlay.style.display = 'none';
+                overlay.classList.remove('welcome-exit');
+            }, OVERLAY_MS);
+        }
+
+        // Show a full-screen overlay (config / invite / settings / crop).
+        // Handles the Tailwind `hidden` + `opacity-0` convention used by
+        // the existing overlays.
+        const _overlayHideTimers = new WeakMap();
+        function showOverlayAnimated(el) {
+            if (!el) return;
+            const pending = _overlayHideTimers.get(el);
+            if (pending) {
+                clearTimeout(pending);
+                _overlayHideTimers.delete(el);
+            }
+            el.classList.remove('hidden', 'opacity-0', 'overlay-exit', 'pointer-events-none');
+            void el.offsetWidth; // restart any CSS animation on the panel
+            el.classList.add('overlay-enter');
+        }
+
+        function hideOverlayAnimated(el, done) {
+            if (!el) {
+                if (done) done();
+                return;
+            }
+            const pending = _overlayHideTimers.get(el);
+            if (pending) clearTimeout(pending);
+            el.classList.remove('overlay-enter');
+            el.classList.add('opacity-0', 'overlay-exit', 'pointer-events-none');
+            _overlayHideTimers.set(el, setTimeout(() => {
+                _overlayHideTimers.delete(el);
+                el.classList.add('hidden');
+                if (done) done();
+            }, OVERLAY_MS));
+        }
+
+        // Animate a modal out (pop-away) before dropping the .open state.
+        function animateModalClose(id) {
+            const overlay = document.getElementById(id);
+            if (!overlay) return;
+            overlay.classList.add('closing');
+            overlay.classList.remove('open');
+            setTimeout(() => overlay.classList.remove('closing'), 280);
+        }
 
         function playNotificationSound(type) {
             if (!audioContext || audioContext.state === 'closed') {
@@ -445,8 +516,7 @@
         }
 
         function closeNameModal() {
-            const modal = document.getElementById('nameModal');
-            modal.classList.remove('open');
+            animateModalClose('nameModal');
         }
 
         function showCustomAlert(title, message) {
@@ -456,7 +526,7 @@
         }
 
         function closeCustomAlert() {
-            document.getElementById('alertModal').classList.remove('open');
+            animateModalClose('alertModal');
         }
 
         function showPasswordModal(title, message, callback) {
@@ -480,8 +550,7 @@
         }
 
         function closePasswordModal() {
-            const modal = document.getElementById('passwordModal');
-            modal.classList.remove('open');
+            animateModalClose('passwordModal');
         }
 
         function showCustomConfirm(title, message, onConfirm) {
@@ -502,7 +571,7 @@
         }
 
         function closeCustomConfirm() {
-            document.getElementById('confirmModal').classList.remove('open');
+            animateModalClose('confirmModal');
         }
 
         let userClickTracker = {};
@@ -802,7 +871,7 @@
         }
 
         function closeKickModal() {
-            document.getElementById('kickModal').classList.remove('open');
+            animateModalClose('kickModal');
             pendingKickUserId = null;
         }
 
@@ -1204,8 +1273,8 @@
                      window.location.href = `/${crypto.randomUUID()}`;
                  } else if (res.status === 401) {
                      sessionStorage.removeItem('rustrooms_room_password');
-                     input.classList.add('ring-2', 'ring-red-500', 'border-red-500');
-                     setTimeout(() => input.classList.remove('ring-2', 'ring-red-500', 'border-red-500'), 500);
+                     input.classList.add('ring-2', 'ring-red-500', 'border-red-500', 'shake-x');
+                     setTimeout(() => input.classList.remove('ring-2', 'ring-red-500', 'border-red-500', 'shake-x'), 550);
                      input.value = '';
                      input.placeholder = "Incorrect Password";
                  } else {
@@ -1222,14 +1291,18 @@
         function proceedToSetup() {
             sessionStorage.setItem('rustrooms_welcomed', 'true');
             const inviteOverlay = document.getElementById('inviteWelcomeOverlay');
-            inviteOverlay.classList.add('opacity-0');
+            const invitePanel = inviteOverlay.querySelector('.glass-panel');
+            if (invitePanel) invitePanel.classList.add('panel-pop-away');
+            inviteOverlay.classList.remove('overlay-enter');
+            inviteOverlay.classList.add('opacity-0', 'overlay-exit');
             setTimeout(() => {
                 inviteOverlay.classList.add('hidden');
-                configOverlay.classList.remove('hidden');
-                configOverlay.classList.remove('opacity-0');
+                inviteOverlay.classList.remove('opacity-0', 'overlay-exit');
+                if (invitePanel) invitePanel.classList.remove('panel-pop-away');
+                showOverlayAnimated(configOverlay);
                 initSetupButtonTouchHandlers();
                 loadDevices();
-            }, 300);
+            }, OVERLAY_MS);
         }
 
         async function updateInviteOverlay() {
@@ -1245,8 +1318,7 @@
                 const uids = Object.keys(data.users);
                 if (uids.length === 0) {
                     sessionStorage.setItem('rustrooms_welcomed', 'true');
-                    configOverlay.classList.remove('hidden');
-                    configOverlay.classList.remove('opacity-0');
+                    showOverlayAnimated(configOverlay);
                     initSetupButtonTouchHandlers();
                     loadDevices();
                     return;
@@ -1280,14 +1352,12 @@
                 }
                 
                 const inviteOverlay = document.getElementById('inviteWelcomeOverlay');
-                inviteOverlay.classList.remove('hidden');
-                setTimeout(() => inviteOverlay.classList.remove('opacity-0'), 10);
+                showOverlayAnimated(inviteOverlay);
                 
             } catch (e) {
                 console.error("Error fetching status", e);
                 // Fallback to setup screen
-                configOverlay.classList.remove('hidden');
-                configOverlay.classList.remove('opacity-0');
+                showOverlayAnimated(configOverlay);
             }
         }
 
@@ -1337,8 +1407,7 @@
                 if (setupDone && roomId) {
                     loadDevices().then(() => joinRoom());
                 } else if (welcomed) {
-                    configOverlay.classList.remove('hidden');
-                    configOverlay.classList.remove('opacity-0');
+                    showOverlayAnimated(configOverlay);
                     initSetupButtonTouchHandlers();
                     loadDevices();
                 } else {
@@ -1346,7 +1415,7 @@
                 }
             });
         } else {
-            welcomeOverlay.style.display = 'flex';
+            showWelcome();
         }
 
         function initSetupButtonTouchHandlers() {

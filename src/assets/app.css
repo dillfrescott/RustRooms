@@ -53,7 +53,6 @@
             --radius-pill: 9999px;
 
             --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-            --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
         }
 
         html {
@@ -481,8 +480,8 @@
             z-index: 9999;
             opacity: 0;
             visibility: hidden;
-            transform: translateY(-8px) scale(0.98);
-            transition: all 0.3s var(--ease-out);
+            transform: translateY(-10px) scale(0.97);
+            transition: opacity 0.25s var(--ease-out), transform 0.38s var(--ease-out), visibility 0s linear 0.25s;
             overflow: hidden;
             overflow-y: auto;
             backdrop-filter: blur(40px) saturate(1.2);
@@ -628,7 +627,7 @@
             background: var(--accent);
             cursor: pointer;
             margin-top: -5px;
-            transition: transform 0.2s var(--ease-spring), box-shadow 0.2s var(--ease-out);
+            transition: transform 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
             box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
         }
         @media (hover: hover) {
@@ -1108,6 +1107,44 @@
             100% { opacity: 1; transform: translateY(0); }
         }
 
+        /* ---- Polished pop up / pop away (smooth ease, no bounce) ---- */
+        @keyframes pop-in {
+            0% { opacity: 0; transform: scale(0.92) translateY(16px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes pop-away {
+            0% { opacity: 1; transform: scale(1) translateY(0); }
+            100% { opacity: 0; transform: scale(0.94) translateY(14px); }
+        }
+        @keyframes blur-pop {
+            0% { opacity: 0; transform: scale(0.95) translateY(26px); filter: blur(14px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); }
+        }
+        .pop-in { animation: pop-in 0.5s var(--ease-out) both; }
+        .pop-away { animation: pop-away 0.28s var(--ease-out) both; }
+
+        /* ---- Overlay fade helpers (full-screen layers) ---- */
+        @keyframes overlay-fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @keyframes overlay-fade-out {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+        .overlay-enter { animation: overlay-fade-in 0.35s var(--ease-out) both; }
+        .overlay-exit { animation: overlay-fade-out 0.28s var(--ease-out) both; }
+
+        /* ---- Wrong-password / error shake ---- */
+        @keyframes shake-x {
+            0%, 100% { transform: translateX(0); }
+            20% { transform: translateX(-9px); }
+            40% { transform: translateX(9px); }
+            60% { transform: translateX(-6px); }
+            80% { transform: translateX(6px); }
+        }
+        .shake-x { animation: shake-x 0.45s var(--ease-out); }
+
         #particleCanvas, #particleCanvasConfig, #particleCanvasInvite {
             position: absolute;
             top: 0;
@@ -1373,19 +1410,26 @@
         .modal-overlay {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.75);
+            background: rgba(0, 0, 0, 0.78);
             z-index: 300;
             display: flex;
             align-items: center;
             justify-content: center;
             opacity: 0;
             pointer-events: none;
-            transition: opacity 0.15s ease;
+            transition: opacity 0.22s var(--ease-out);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
         }
 
         .modal-overlay.open {
             opacity: 1;
             pointer-events: auto;
+        }
+
+        .modal-overlay.closing:not(.open) {
+            opacity: 0;
+            pointer-events: none;
         }
 
         .modal-content {
@@ -1396,14 +1440,20 @@
             max-width: 420px;
             padding: 36px 28px;
             opacity: 0;
-            transform: scale(0.96) translateY(10px);
-            transition: opacity 0.18s var(--ease-out), transform 0.28s var(--ease-out);
+            transform: scale(0.9) translateY(20px);
+            transition: opacity 0.2s var(--ease-out), transform 0.45s var(--ease-out);
             box-shadow: var(--shadow-xl);
         }
 
         .modal-overlay.open .modal-content {
             opacity: 1;
             transform: scale(1) translateY(0);
+        }
+
+        .modal-overlay.closing:not(.open) .modal-content {
+            opacity: 0;
+            transform: scale(0.93) translateY(14px);
+            transition: opacity 0.16s ease, transform 0.24s var(--ease-out);
         }
 
         .room-user-row {
@@ -1459,9 +1509,10 @@
             padding: 14px 16px;
             box-shadow: var(--shadow-md);
             opacity: 0;
-            transform: scale(0.96) translateY(-6px);
+            transform: scale(0.92) translateY(-10px);
+            transform-origin: top left;
             pointer-events: none;
-            transition: opacity 0.15s ease, transform 0.2s var(--ease-out);
+            transition: opacity 0.16s var(--ease-out), transform 0.34s var(--ease-out);
         }
 
         .user-volume-menu.open {
@@ -1883,23 +1934,62 @@
             50% { background-position: 100% 50%; }
         }
 
-        /* ---- Welcome content staggers in on load ---- */
-        #welcomeTitleContainer {
-            animation: fadeIn 0.6s var(--ease-out) both;
+        /* ---- Welcome content pops in with a soft blur as one unit ---- */
+        #welcomeContent {
+            opacity: 0;
+            animation: blur-pop 0.8s var(--ease-out) 0.1s both;
         }
-        #startActionContainer {
-            animation: fadeIn 0.6s var(--ease-out) 0.12s both;
+        #welcomeContent .hero-title {
+            animation: hero-shimmer 9s ease-in-out 1.15s infinite;
         }
 
-        /* ---- Setup / settings / crop panels pop in when shown ---- */
+        /* ---- Welcome overlay fades in / out as a whole ---- */
+        #welcomeOverlay {
+            opacity: 0;
+        }
+        #welcomeOverlay.welcome-enter {
+            opacity: 1;
+            transition: opacity 0.45s var(--ease-out);
+        }
+        #welcomeOverlay.welcome-exit {
+            opacity: 0;
+            transition: opacity 0.3s var(--ease-out);
+        }
+
+        /* ---- Setup / settings / crop / invite panels pop in when shown ---- */
         @keyframes panel-pop {
-            from { opacity: 0; transform: translateY(14px) scale(0.985); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
+            0% { opacity: 0; transform: translateY(24px) scale(0.94); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes panel-pop-away {
+            from { opacity: 1; transform: translateY(0) scale(1); }
+            to { opacity: 0; transform: translateY(18px) scale(0.94); }
+        }
+        .panel-pop-away {
+            animation: panel-pop-away 0.26s var(--ease-out) both;
         }
         #configPanel,
+        #inviteWelcomeOverlay > .glass-panel,
         #settingsOverlay > .glass-panel,
         #cropModal > .glass-panel {
-            animation: panel-pop 0.4s var(--ease-out) both;
+            animation: panel-pop 0.5s var(--ease-out) both;
+        }
+        #configPanel.panel-pop-away,
+        #inviteWelcomeOverlay > .glass-panel.panel-pop-away,
+        #settingsOverlay > .glass-panel.panel-pop-away,
+        #cropModal > .glass-panel.panel-pop-away {
+            animation: panel-pop-away 0.26s var(--ease-out) both;
+        }
+
+        /* ---- Call layout appears without entrance animation ---- */
+        #appLayout {
+            animation: none;
+        }
+
+        /* ---- Password reveal swap on the home screen ---- */
+        #btnStartRoom,
+        #passwordInputContainer {
+            transition: opacity 0.28s var(--ease-out), transform 0.42s var(--ease-out);
         }
 
         /* ---- Missing helpers used by the UI ---- */

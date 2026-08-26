@@ -1897,7 +1897,6 @@
                 }, 800);
             }
 
-            const welcomeOverlay = document.getElementById('welcomeOverlay');
             const mainApp = document.querySelector('main');
             const taskbar = document.querySelector('.taskbar');
             const sidebar = document.getElementById('roomSidebar');
@@ -1925,9 +1924,9 @@
 
             if (roomId) {
                 updateInviteOverlay();
-                if (welcomeOverlay) welcomeOverlay.style.display = 'none';
+                hideWelcome();
             } else {
-                if (welcomeOverlay) welcomeOverlay.style.display = 'flex';
+                showWelcome();
                 if (inviteOverlay) {
                     inviteOverlay.classList.add('hidden', 'opacity-0');
                 }

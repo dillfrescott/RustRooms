@@ -68,7 +68,7 @@
             }
 
             await populateSettingsDeviceList();
-            settingsOverlay.classList.remove('hidden');
+            showOverlayAnimated(settingsOverlay);
             initSetupButtonTouchHandlers();
             if (localStream) {
                 await setupVolumeMeter(localStream, 'settingsMicBar');
@@ -76,7 +76,7 @@
         }
 
         function closeSettings() {
-            settingsOverlay.classList.add('hidden');
+            hideOverlayAnimated(settingsOverlay);
             if (settingsMeterFrameId) cancelAnimationFrame(settingsMeterFrameId);
             if (isOnTheGoMode) {
                 toggleOnTheGoMode(true, true);
@@ -432,7 +432,7 @@
             const modal = document.getElementById('cropModal');
             const wrapper = document.getElementById('cropWrapper');
             wrapper.innerHTML = '';
-            modal.classList.remove('hidden');
+            showOverlayAnimated(modal);
 
             currentCroppie = new Croppie(wrapper, {
                 viewport: { width: 200, height: 200, type: 'square' },
@@ -456,7 +456,7 @@
         }
 
         function closeCropModal() {
-            document.getElementById('cropModal').classList.add('hidden');
+            hideOverlayAnimated(document.getElementById('cropModal'));
             if (currentCroppie) {
                 currentCroppie.destroy();
                 currentCroppie = null;
