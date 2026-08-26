@@ -55,7 +55,6 @@ const ASSETS = [
     '/assets/tailwind-config.js',
     '/assets/app.css',
     '/assets/app.js',
-    '/assets/particles.js',
     '/assets/croppie.min.js',
     '/assets/croppie.min.css',
     '/assets/inter.css',
@@ -156,12 +155,6 @@ asset_route!(
     str
 );
 asset_route!(app_css, "text/css", "assets/app.css", str);
-asset_route!(
-    particles_js,
-    "application/javascript",
-    "assets/particles.js",
-    str
-);
 asset_route!(
     croppie_js,
     "application/javascript",

@@ -211,7 +211,7 @@ pub(crate) async fn index(
 
     // Any path deeper than "/" is a call link (room or room/channel).
     let path = uri.path();
-    let is_call_link = path.trim_matches('/') != "";
+    let is_call_link = !path.trim_matches('/').is_empty();
 
     let (page_title, meta_tags) = match (is_call_link, request_authority(&headers)) {
         (false, Some(authority)) => {
@@ -225,7 +225,7 @@ pub(crate) async fn index(
         _ => ("RustRooms", String::new()),
     };
 
-    let html = render_html_page(&page_title, &meta_tags);
+    let html = render_html_page(page_title, &meta_tags);
 
     let csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; script-src-elem 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: https: blob:; connect-src 'self' wss: ws:; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none';".to_string();
 

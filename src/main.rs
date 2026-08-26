@@ -96,7 +96,6 @@ async fn main() {
         .route("/assets/tailwind-config.js", get(tailwind_config_js))
         .route("/assets/app.css", get(app_css))
         .route("/assets/app.js", get(app_js))
-        .route("/assets/particles.js", get(particles_js))
         .route("/assets/croppie.min.js", get(croppie_js))
         .route("/assets/croppie.min.css", get(croppie_css))
         .route("/assets/inter.css", get(inter_css))
