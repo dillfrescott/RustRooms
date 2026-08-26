@@ -1,4 +1,4 @@
-use crate::{rooms::handle_socket, state::*, web_assets::render_html_page};
+use crate::{rooms::handle_socket, state::*, turn::*, web_assets::render_html_page};
 use axum::{
     extract::{Path, Query, State, ws::WebSocketUpgrade},
     http::{header, uri::Authority, Uri},
@@ -239,6 +239,45 @@ pub(crate) async fn index(
         .into_response()
 }
 
+/// Mint short-lived credentials for the embedded TURN relay and advertise the
+/// relay endpoints on this node's own host. Every distributed node runs the
+/// same relay behind the same public hostname, and all nodes share
+/// TURN_SECRET, so the returned credentials work on whichever node a client's
+/// media actually lands on.
+pub(crate) async fn turn_config(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let Some(secret) = state.turn_secret.as_deref() else {
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "TURN relay is not configured",
+        )
+            .into_response();
+    };
+    // The relay URLs must use the same host the client used to reach us (the
+    // Host header), so a proxy or custom domain never points ICE at the wrong
+    // address.
+    let Some(host) = request_authority(&headers).map(|authority| authority.host().to_lowercase())
+    else {
+        return (axum::http::StatusCode::BAD_REQUEST, "Missing Host header").into_response();
+    };
+
+    let (username, credential) = turn_credential(secret, TURN_CREDENTIAL_TTL_SECS);
+    let body = serde_json::json!({
+        "urls": [
+            format!("turn:{host}:3478?transport=udp"),
+            // UDP 443 is the "web port": separate from the TCP HTTPS listener,
+            // and commonly the only UDP port corporate firewalls allow.
+            format!("turn:{host}:443?transport=udp"),
+        ],
+        "username": username,
+        "credential": credential,
+        "ttl": TURN_CREDENTIAL_TTL_SECS,
+    });
+    ([(header::CACHE_CONTROL, "no-store")], axum::Json(body)).into_response()
+}
+
 pub(crate) async fn ws_handler(
     Path((room_id, channel_id)): Path<(String, String)>,
     Query(_): Query<HashMap<String, String>>,
@@ -278,6 +317,7 @@ mod tests {
             rooms: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             room_cleanup_generations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             room_creation_password: password.map(str::to_string),
+            turn_secret: None,
             distributed_tx: tokio::sync::broadcast::channel(DISTRIBUTED_BROADCAST_CAPACITY).0,
             remote_users: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             remote_user_owners: Arc::new(tokio::sync::Mutex::new(HashMap::new())),

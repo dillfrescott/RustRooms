@@ -209,14 +209,6 @@ asset_route!(
 pub(crate) async fn app_js() -> impl IntoResponse {
     static JAVASCRIPT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let javascript = JAVASCRIPT.get_or_init(|| {
-        let turn_url = std::env::var("TURN_URL").unwrap_or_default();
-        let turn_username = std::env::var("TURN_USERNAME").unwrap_or_default();
-        let turn_credential = std::env::var("TURN_CREDENTIAL").unwrap_or_default();
-        let turn_url = serde_json::to_string(&turn_url).unwrap_or_else(|_| "\"\"".to_string());
-        let turn_username =
-            serde_json::to_string(&turn_username).unwrap_or_else(|_| "\"\"".to_string());
-        let turn_credential =
-            serde_json::to_string(&turn_credential).unwrap_or_else(|_| "\"\"".to_string());
         concat!(
             include_str!("assets/client/gifenc.js"),
             include_str!("assets/client/gif_resize.js"),
@@ -225,9 +217,7 @@ pub(crate) async fn app_js() -> impl IntoResponse {
             include_str!("assets/client/connection.js"),
             include_str!("assets/client/settings.js"),
         )
-        .replace("{{TURN_URL}}", &turn_url)
-        .replace("{{TURN_USERNAME}}", &turn_username)
-        .replace("{{TURN_CREDENTIAL}}", &turn_credential)
+        .to_string()
     });
 
     (

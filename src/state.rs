@@ -107,6 +107,10 @@ pub(crate) struct AppState {
     pub(crate) rooms: RoomMap,
     pub(crate) room_cleanup_generations: RoomCleanupMap,
     pub(crate) room_creation_password: Option<String>,
+    // Shared secret for the embedded TURN relay's long-term credentials
+    // (RFC 5389 REST scheme). All distributed nodes must share the same
+    // secret so credentials minted by one node validate on another.
+    pub(crate) turn_secret: Option<String>,
     pub(crate) distributed_tx: tokio::sync::broadcast::Sender<String>,
     pub(crate) remote_users: RemoteUsersMap,
     pub(crate) remote_user_owners: RemoteUserOwnersMap,

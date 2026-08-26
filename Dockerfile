@@ -1,5 +1,7 @@
 FROM rust:1-bookworm AS builder
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# cmake is required to build aws-lc-sys (BoringSSL), which the embedded
+# turn-server depends on.
+RUN apt-get update && apt-get install -y git cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/src/rustrooms
 COPY . .
 RUN cargo build --release

@@ -16,5 +16,13 @@ redis = { version = "0.32", features = ["tokio-comp", "tokio-rustls-comp"] }
 # redis enables rustls without choosing a process-level crypto provider.
 # Select one explicitly so rediss:// connections cannot panic at runtime.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Embedded TURN relay (mycrl/turn-rs) so calls work behind restrictive NATs
+# without an external TURN provider. udp/tcp transports only: the ssl/api/
+# prometheus features pull in tonic/axum-server/aws-lc TLS stacks we don't use.
+turn-server = { version = "4.1", default-features = false, features = ["udp", "tcp"] }
+# Long-term credential mints for the embedded TURN server (HMAC-SHA1 + base64,
+# matching turn-server's own static_auth_secret implementation).
+base64 = "0.22"
+ring = "0.17"
 
 

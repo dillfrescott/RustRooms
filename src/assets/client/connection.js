@@ -124,6 +124,11 @@
                                         persistentUserId = msg.userId;
                                         localStorage.setItem('rustrooms_user_id', persistentUserId);
                                     }
+                                    // Wait for the TURN credentials before any
+                                    // peer connection is created, so relay
+                                    // candidates are ready when existing-users
+                                    // and user-joined start initPeer.
+                                    await ensureTurnConfig();
                                     break;
                                 case 'error':
                                     if (msg.data && msg.data.code === 'PASSWORD_REQUIRED') {

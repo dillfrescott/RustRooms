@@ -8,6 +8,31 @@ primary_region = 'ord'
   internal_port = 3000
   force_https = true
 
+# Embedded TURN relay (UDP). 3478 is the standard TURN port; 443 is the
+# "web port" trick (UDP is separate from the TCP HTTPS listener and commonly
+# the only UDP port corporate firewalls allow). The 49152-65535 range carries
+# the per-call relayed media ports. TCP TURN is intentionally not exposed:
+# Fly cannot forward TCP port ranges, and without TCP/443 it rarely helps
+# restrictive networks anyway.
+[[services]]
+  protocol = "udp"
+  internal_port = 3478
+  [[services.ports]]
+    port = 3478
+
+[[services]]
+  protocol = "udp"
+  internal_port = 443
+  [[services.ports]]
+    port = 443
+
+[[services]]
+  protocol = "udp"
+  internal_port = 49152
+  [[services.ports]]
+    start_port = 49152
+    end_port = 65535
+
 [[vm]]
   size = 'shared-cpu-1x'
   memory = '256mb'
