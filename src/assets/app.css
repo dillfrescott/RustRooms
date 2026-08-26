@@ -593,6 +593,36 @@ input[type=range]::-moz-range-thumb {
 }
 .taskbar > div > .w-px {
     background: var(--md-outline-variant) !important;
+    flex-shrink: 0;
+}
+
+/* Taskbar control buttons: fluid sizing so they never overflow on mobile.
+ * Desktop keeps the M3 56px look; on narrow screens the buttons shrink
+ * (down to 32px) and grow equally to fill the row, capped at 56px. */
+.taskbar > div > .control-btn {
+    width: auto;
+    height: auto;
+    aspect-ratio: 1 / 1;
+    flex: 1 1 44px;
+    min-width: 32px;
+    max-width: 56px;
+}
+.taskbar > div > .control-btn svg {
+    width: min(26px, 60%);
+    height: min(26px, 60%);
+}
+@media (max-width: 420px) {
+    .taskbar > div {
+        padding: 10px 10px !important;
+        gap: 5px !important;
+    }
+    .taskbar > div > .control-btn {
+        flex-basis: 42px;
+        min-width: 30px;
+    }
+    .taskbar > div > .w-px {
+        margin: 0 4px;
+    }
 }
 
 @media (max-width: 1024px) {
