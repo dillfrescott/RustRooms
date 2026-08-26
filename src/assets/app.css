@@ -336,9 +336,9 @@ body {
     height: 56px;
     padding: 0;
     border-radius: 14px !important;
-    border: 1px solid var(--md-primary);
-    background: var(--md-primary);
-    color: var(--md-on-primary);
+    border: 1px solid var(--md-secondary-container);
+    background: var(--md-secondary-container);
+    color: var(--md-on-secondary-container);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -360,18 +360,18 @@ body {
  * whose lifecycle is fully controlled so it can never get stuck. */
 @media (hover: hover) and (pointer: fine) {
     .control-btn:hover {
-        background: #93B8F2;
-        border-color: #93B8F2;
+        background: color-mix(in srgb, var(--md-secondary-container) 82%, white);
+        border-color: color-mix(in srgb, var(--md-secondary-container) 82%, white);
     }
     .control-btn:active {
-        background: color-mix(in srgb, var(--md-primary) 82%, black);
-        border-color: color-mix(in srgb, var(--md-primary) 82%, black);
+        background: color-mix(in srgb, var(--md-secondary-container) 82%, black);
+        border-color: color-mix(in srgb, var(--md-secondary-container) 82%, black);
         transform: scale(0.92);
     }
 }
 .control-btn.pressed {
-    background: color-mix(in srgb, var(--md-primary) 82%, black);
-    border-color: color-mix(in srgb, var(--md-primary) 82%, black);
+    background: color-mix(in srgb, var(--md-secondary-container) 82%, black);
+    border-color: color-mix(in srgb, var(--md-secondary-container) 82%, black);
     transform: scale(0.92);
 }
 .control-btn:disabled {
