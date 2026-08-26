@@ -26,8 +26,8 @@ pub(crate) async fn manifest_json() -> impl IntoResponse {
     "start_url": "/",
     "scope": "/",
     "display": "standalone",
-    "background_color": "#000000",
-    "theme_color": "#000000",
+    "background_color": "#101418",
+    "theme_color": "#101418",
     "description": "Simple, secure, and fast video conferencing.",
     "icons": [
         {
@@ -46,7 +46,7 @@ pub(crate) async fn manifest_json() -> impl IntoResponse {
 
 pub(crate) async fn service_worker_js() -> impl IntoResponse {
     let sw = r##"
-const CACHE_NAME = 'rustrooms-v3';
+const CACHE_NAME = 'rustrooms-m3-v1';
 const ASSETS = [
     '/icon.svg',
     '/rnnoise.js',
@@ -112,12 +112,8 @@ self.addEventListener('fetch', (event) => {
 
 pub(crate) async fn icon_svg() -> impl IntoResponse {
     let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-    <rect width="512" height="512" rx="128" ry="128" fill="#000000"/>
-    <circle cx="256" cy="256" r="180" fill="#6366f1" fill-opacity="0.15"/>
-    <circle cx="256" cy="256" r="140" fill="#6366f1" fill-opacity="0.3"/>
-    <circle cx="256" cy="256" r="100" fill="#6366f1"/>
-    <path d="M256 196a60 60 0 1 0 0 120 60 60 0 0 0 0-120z" fill="#ffffff"/>
-    <path d="M196 256a60 60 0 0 1 120 0" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+    <rect width="512" height="512" rx="112" fill="#101418"/>
+    <circle cx="256" cy="256" r="168" fill="#A8C7FA"/>
 </svg>"##;
     ([(header::CONTENT_TYPE, "image/svg+xml")], svg)
 }
@@ -229,14 +225,12 @@ pub(crate) async fn app_js() -> impl IntoResponse {
         let turn_credential =
             serde_json::to_string(&turn_credential).unwrap_or_else(|_| "\"\"".to_string());
         concat!(
-            include_str!("assets/client/ink.js"),
             include_str!("assets/client/gifenc.js"),
             include_str!("assets/client/gif_resize.js"),
             include_str!("assets/client/core.js"),
             include_str!("assets/client/interface.js"),
             include_str!("assets/client/connection.js"),
             include_str!("assets/client/settings.js"),
-            include_str!("assets/client/globe.js"),
         )
         .replace("{{TURN_URL}}", &turn_url)
         .replace("{{TURN_USERNAME}}", &turn_username)

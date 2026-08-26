@@ -8,7 +8,7 @@
     {{META_TAGS}}
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/icon.svg">
-    <meta name="theme-color" content="#000000">
+    <meta name="theme-color" content="#101418">
     <script src="/assets/tailwind.js"></script>
     <script src="/assets/tailwind-config.js"></script>
     <link href="/assets/inter.css" rel="stylesheet">
@@ -101,10 +101,11 @@
     </div>
 
     <div id="welcomeOverlay" class="fixed inset-0 z-[70] flex flex-col items-center justify-center p-4" style="display: none; background: var(--bg-primary);">
-        <canvas id="particleCanvas"></canvas>
-        <canvas id="globeCanvas"></canvas>
         <div class="text-center space-y-8 max-w-md w-full relative z-10" id="welcomeContent">
             <div class="space-y-4" id="welcomeTitleContainer">
+                <div class="welcome-logo" aria-hidden="true">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+                </div>
                 <h1 class="hero-title text-5xl md:text-7xl font-bold tracking-tight" style="color: #ffffff; font-weight: 800; letter-spacing: -0.05em; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Rust Rooms</h1>
                 <p style="color: var(--text-secondary);" class="text-base md:text-lg font-normal opacity-60">Simple, secure, and fast video conferencing.</p>
             </div>
@@ -125,7 +126,6 @@
     </div>
 
     <div id="inviteWelcomeOverlay" class="fixed inset-0 z-[80] flex flex-col items-center justify-center p-4 transition-opacity duration-300 hidden opacity-0" style="background: var(--bg-primary);">
-        <canvas id="particleCanvasInvite"></canvas>
         <div class="glass-panel p-8 md:p-12 rounded-3xl max-w-lg w-full relative z-10 text-center space-y-8 overflow-hidden">
             <div class="space-y-3">
                 <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold uppercase tracking-wider mb-2">
@@ -156,7 +156,6 @@
     </div>
 
     <div id="configOverlay" class="fixed inset-0 z-[60] flex flex-col items-center justify-center p-4 transition-opacity duration-300 hidden opacity-0" style="background: var(--bg-primary);">
-        <canvas id="particleCanvasConfig" class="absolute inset-0 pointer-events-none" style="z-index: 1;"></canvas>
         <div id="configPanel" class="glass-panel p-8 md:p-10 rounded-2xl max-w-5xl w-full max-h-[95vh] overflow-y-auto relative z-10">
             <div class="text-center space-y-2 mb-8">
                 <h1 class="text-3xl md:text-4xl font-bold tracking-tight" style="color: var(--text-primary);">Setup</h1>
@@ -240,22 +239,22 @@
 
                     <!-- Connection & Quality Settings -->
                     <div class="border-t border-[var(--border-subtle)] pt-4 mt-4 space-y-3 text-left">
-                        <div class="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+                        <div class="m3-row flex items-center justify-between">
                             <div class="flex flex-col">
                                 <span class="text-sm font-semibold text-white">Low Bandwidth Mode</span>
                                 <span class="text-xs text-zinc-400">Reduces audio & video quality to save data</span>
                             </div>
-                            <label class="relative inline-flex items-center cursor-pointer">
+                            <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 ml-4">
                                 <input type="checkbox" id="setupLowBandwidth" onchange="handleLowBandwidthChange(this.checked)" class="sr-only peer">
                                 <div class="switch-track w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 peer-checked:after:bg-white"></div>
                             </label>
                         </div>
-                        <div id="setupOnTheGoRow" class="hidden flex items-center justify-between p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+                        <div id="setupOnTheGoRow" class="hidden m3-row flex items-center justify-between">
                             <div class="flex flex-col">
                                 <span class="text-sm font-semibold text-white">On the Go Mode</span>
                                 <span class="text-xs text-zinc-400">Simplify UI with big buttons and hide video</span>
                             </div>
-                            <label class="relative inline-flex items-center cursor-pointer">
+                            <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 ml-4">
                                 <input type="checkbox" id="setupOnTheGo" onchange="handleOnTheGoChange(this.checked)" class="sr-only peer">
                                 <div class="switch-track w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 peer-checked:after:bg-white"></div>
                             </label>
@@ -330,22 +329,22 @@
                             </select>
                         </div>
                         <div class="border-t border-[var(--border-subtle)] pt-4 mt-4 space-y-3 text-left">
-                            <div class="flex items-center justify-between p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+                            <div class="m3-row flex items-center justify-between">
                                 <div class="flex flex-col">
                                     <span class="text-sm font-semibold text-white">Low Bandwidth Mode</span>
                                     <span class="text-xs text-zinc-400">Reduces audio & video quality to save data</span>
                                 </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
+                                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 ml-4">
                                     <input type="checkbox" id="settingsLowBandwidth" onchange="handleLowBandwidthChange(this.checked)" class="sr-only peer">
                                     <div class="switch-track w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 peer-checked:after:bg-white"></div>
                                 </label>
                             </div>
-                            <div id="settingsOnTheGoRow" class="hidden flex items-center justify-between p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-subtle)]">
+                            <div id="settingsOnTheGoRow" class="hidden m3-row flex items-center justify-between">
                                 <div class="flex flex-col">
                                     <span class="text-sm font-semibold text-white">On the Go Mode</span>
                                     <span class="text-xs text-zinc-400">Simplify UI with big buttons and hide video</span>
                                 </div>
-                                <label class="relative inline-flex items-center cursor-pointer">
+                                <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 ml-4">
                                     <input type="checkbox" id="settingsOnTheGo" onchange="handleOnTheGoChange(this.checked)" class="sr-only peer">
                                     <div class="switch-track w-11 h-6 bg-zinc-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500 peer-checked:after:bg-white"></div>
                                 </label>
@@ -364,7 +363,7 @@
     </div>
 
     <!-- On-the-go Mode Overlay -->
-    <div id="onTheGoOverlay" class="fixed inset-0 z-[150] flex flex-col justify-between p-4 sm:p-6 gap-y-8 overflow-y-auto hidden" style="background: #000000;">
+    <div id="onTheGoOverlay" class="fixed inset-0 z-[150] flex flex-col justify-between p-4 sm:p-6 gap-y-8 overflow-y-auto hidden" style="background: var(--bg-primary);">
         <!-- Orientation Warning Overlay (only visible in landscape mode on mobile/tablet) -->
         <div id="otgOrientationWarning" class="fixed inset-0 z-[200] flex-col items-center justify-center p-6 bg-black text-center hidden">
             <div class="mb-6 otg-rotate-anim">
@@ -461,7 +460,7 @@
     </div>
 
     <div id="appLayout" class="hidden flex-col h-full w-full">
-        <div class="app-topbar flex-none p-3 sm:p-4 md:p-5 z-40 flex justify-between items-center gap-2 md:gap-4 pl-3 md:pl-4" style="background: rgba(0, 0, 0, 0.7); border-bottom: 1px solid var(--border-subtle); backdrop-filter: blur(32px) saturate(1.2); -webkit-backdrop-filter: blur(32px) saturate(1.2);">
+        <div class="app-topbar flex-none z-40 flex justify-between items-center gap-2 md:gap-4 pl-3 md:pl-4">
             <div class="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
                 <button id="sidebarToggle" onclick="toggleSidebar()" class="control-btn shadow-lg hidden !w-10 !h-10 md:!w-12 md:!h-12 flex-shrink-0" title="Channels" aria-label="Channels">
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
@@ -571,7 +570,6 @@
                 .catch(err => console.log('SW error', err));
         }
     </script>
-    <script src="/assets/particles.js"></script>
     <script src="/assets/app.js"></script>
 
     <div id="cropModal" class="fixed inset-0 z-[250] flex items-center justify-center p-4 hidden" style="background: var(--bg-primary);">
