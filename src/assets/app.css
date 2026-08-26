@@ -858,7 +858,8 @@ video.active + .avatar-layer { display: none !important; }
     background: color-mix(in srgb, var(--md-on-surface) 12%, transparent) !important;
 }
 .fs-btn.bg-indigo-600 {
-    background: var(--md-primary-container) !important;
+    background: var(--md-primary) !important;
+    color: var(--md-on-primary) !important;
 }
 
 /* Camera + screen share combined tile */
