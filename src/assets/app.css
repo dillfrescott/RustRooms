@@ -1862,8 +1862,7 @@
             position: absolute;
             inset: 0;
             background:
-                radial-gradient(85% 65% at 78% 52%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 68%),
-                radial-gradient(55% 45% at 18% 26%, color-mix(in srgb, var(--accent-blue) 6%, transparent), transparent 72%);
+                radial-gradient(85% 65% at 78% 52%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 68%);
             pointer-events: none;
             z-index: 0;
         }
