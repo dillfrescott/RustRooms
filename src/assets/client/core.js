@@ -751,39 +751,16 @@
             volControls.appendChild(row);
         }
 
-        // ICE servers come from the same-origin /turn endpoint, which mints
-        // short-lived long-term credentials (base64 HMAC-SHA1 of the shared
-        // secret, username = expiry timestamp) for the embedded TURN relay.
-        // Browsers reject an ICE server whose URL is empty, so host
-        // candidates still work if the fetch fails or TURN is unavailable.
-        let rtcConfig = { iceServers: [] };
-        let turnConfigPromise = null;
-
-        function ensureTurnConfig() {
-            if (!turnConfigPromise) {
-                turnConfigPromise = (async () => {
-                    try {
-                        const response = await fetch('/turn', {
-                            headers: { Accept: 'application/json' }
-                        });
-                        if (!response.ok) return;
-                        const data = await response.json();
-                        if (!data || !Array.isArray(data.urls) || data.urls.length === 0) return;
-                        rtcConfig = {
-                            iceServers: data.urls.map(url => ({
-                                urls: url,
-                                username: data.username,
-                                credential: data.credential
-                            }))
-                        };
-                    } catch (error) {
-                        console.warn('TURN config fetch failed; using host candidates only:', error);
-                    }
-                })();
-            }
-            return turnConfigPromise;
-        }
-        ensureTurnConfig();
+        const turnUrl = {{TURN_URL}};
+        const rtcConfig = {
+            // Browsers reject an ICE server whose URL is empty. Host
+            // candidates still work when TURN is intentionally unconfigured.
+            iceServers: turnUrl ? [{
+                urls: turnUrl,
+                username: {{TURN_USERNAME}},
+                credential: {{TURN_CREDENTIAL}}
+            }] : []
+        };
 
         function getReconnectDelay(attempt) {
             const exponentialDelay = Math.min(

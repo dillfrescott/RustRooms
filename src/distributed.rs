@@ -1138,7 +1138,6 @@ mod tests {
             rooms: Arc::new(Mutex::new(HashMap::new())),
             room_cleanup_generations: Arc::new(Mutex::new(HashMap::new())),
             room_creation_password: None,
-            turn_secret: None,
             distributed_tx: tokio::sync::broadcast::channel(DISTRIBUTED_BROADCAST_CAPACITY).0,
             remote_users: Arc::new(Mutex::new(HashMap::new())),
             remote_user_owners: Arc::new(Mutex::new(HashMap::new())),

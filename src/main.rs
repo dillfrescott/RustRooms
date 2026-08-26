@@ -3,7 +3,6 @@ mod redis_distributed;
 mod rooms;
 mod routes;
 mod state;
-mod turn;
 mod web_assets;
 
 use axum::{Router, routing::get};
@@ -16,7 +15,6 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::Mutex;
-use turn::spawn_turn_server;
 use uuid::Uuid;
 use web_assets::*;
 #[tokio::main]
@@ -33,27 +31,6 @@ async fn main() {
         .ok()
         .map(|p| p.trim().to_string())
         .filter(|s| !s.is_empty());
-    // Shared secret for the embedded TURN relay. A random per-boot secret is
-    // fine on a single node, but every distributed instance must set the
-    // same TURN_SECRET or credentials minted on one node are rejected by the
-    // others (and by itself after a restart).
-    let turn_secret = match std::env::var("TURN_SECRET")
-        .ok()
-        .map(|secret| secret.trim().to_string())
-        .filter(|secret| !secret.is_empty())
-    {
-        Some(secret) => secret,
-        None => {
-            let secret = Uuid::new_v4().to_string();
-            eprintln!(
-                "WARNING: TURN_SECRET is not set; generated a random per-boot secret. \
-                 Set TURN_SECRET to the same value on every distributed node so \
-                 credentials remain valid across instances and restarts."
-            );
-            secret
-        }
-    };
-    spawn_turn_server(turn_secret.clone());
     let redis_urls = parse_redis_urls(std::env::var("REDIS_URL").ok().iter().map(String::as_str));
     let redis_prefix = std::env::var("REDIS_PREFIX")
         .ok()
@@ -88,7 +65,6 @@ async fn main() {
         rooms,
         room_cleanup_generations,
         room_creation_password,
-        turn_secret: Some(turn_secret),
         distributed_tx,
         remote_users,
         remote_user_owners,
@@ -138,7 +114,6 @@ async fn main() {
             "/ws/{room_id}/{channel_id}/",
             get(redirect_ws_trailing_slash),
         )
-        .route("/turn", get(turn_config))
         .with_state(state.clone());
 
     let port = std::env::var("PORT")
