@@ -1257,6 +1257,14 @@
             }, { passive: true });
         });
 
+        // Touch devices (especially iOS Safari) keep :active/:hover on a tapped
+        // button while it stays focused, so it looks pressed until the user taps
+        // elsewhere. Blur the button once the tap ends to clear that state.
+        document.addEventListener('touchend', () => {
+            const el = document.activeElement;
+            if (el && el.tagName === 'BUTTON') el.blur();
+        }, { passive: true });
+
         async function loadDevices() {
             const btnJoin = document.getElementById('btnJoin');
             const btnCam = document.getElementById('btnCam');

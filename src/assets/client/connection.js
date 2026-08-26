@@ -2490,7 +2490,12 @@
                 console.error("Camera switch failed", e);
             } finally {
                 switchCamInProgress = false;
-                if (btn) btn.disabled = false;
+                if (btn) {
+                    btn.disabled = false;
+                    // Clear focus so the pressed (:active) style doesn't stick
+                    // on mobile after the tap.
+                    btn.blur();
+                }
             }
         }
 
