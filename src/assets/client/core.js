@@ -30,6 +30,16 @@
             initialChannelNameEl.innerText = `# ${channelId}`;
         }
 
+        // Keep the browser tab title in sync with the live channel. Polished
+        // product detail: the tab always says where you are (and resets to
+        // plain "RustRooms" when you leave).
+        function updatePageTitle() {
+            const el = document.getElementById('currentChannelName');
+            const label = el && el.innerText.trim() ? el.innerText.trim() : '';
+            document.title = label ? `${label} — RustRooms` : 'RustRooms';
+        }
+        if (roomId) updatePageTitle();
+
         const currentPath = window.location.pathname;
         const newPath = `/${encodeURIComponent(roomId)}${channelId && channelId.toLowerCase() !== 'general' ? '/' + encodeURIComponent(channelId) : ''}`;
         if (currentPath !== newPath && roomId) {
@@ -858,6 +868,14 @@
             return Math.round((deltaBytes * 8) / (deltaSec * 1000));
         }
 
+        // Human-friendly bitrate: Mbps with one decimal at 1000 kbps+, else kbps.
+        function formatBitrate(kbps) {
+            if (kbps >= 1000) {
+                return `${(kbps / 1000).toFixed(1).replace(/\.0$/, '')} Mbps`;
+            }
+            return `${kbps} kbps`;
+        }
+
         async function updateWebRTCStats() {
             const statPing = document.getElementById('statPing');
             const statJitter = document.getElementById('statJitter');
@@ -922,7 +940,7 @@
                                 newStatsData[key] = { bytes: report.bytesReceived, timestamp: nowMs };
                                 const bitrate = calcBitrateKbps(key, report.bytesReceived, nowMs);
                                 if (bitrate > 0) {
-                                    videoBitrate = `${bitrate} kbps`;
+                                    videoBitrate = formatBitrate(bitrate);
                                 }
                             }
                             totalPacketsReceived += report.packetsReceived || 0;
@@ -933,7 +951,7 @@
                                 newStatsData[key] = { bytes: report.bytesReceived, timestamp: nowMs };
                                 const bitrate = calcBitrateKbps(key, report.bytesReceived, nowMs);
                                 if (bitrate > 0) {
-                                    audioBitrate = `${bitrate} kbps`;
+                                    audioBitrate = formatBitrate(bitrate);
                                 }
                             }
                             if (report.jitter && !isNaN(parseFloat(report.jitter))) {
@@ -956,7 +974,7 @@
                                 newStatsData[key] = { bytes: report.bytesSent, timestamp: nowMs };
                                 const bitrate = calcBitrateKbps(key, report.bytesSent, nowMs);
                                 if (bitrate > 0 && videoBitrate === '--') {
-                                    videoBitrate = `${bitrate} kbps`;
+                                    videoBitrate = formatBitrate(bitrate);
                                 }
                             }
                             totalPacketsSent += report.packetsSent || 0;
@@ -966,7 +984,7 @@
                                 newStatsData[key] = { bytes: report.bytesSent, timestamp: nowMs };
                                 const bitrate = calcBitrateKbps(key, report.bytesSent, nowMs);
                                 if (bitrate > 0 && audioBitrate === '--') {
-                                    audioBitrate = `${bitrate} kbps`;
+                                    audioBitrate = formatBitrate(bitrate);
                                 }
                             }
                             totalPacketsSent += report.packetsSent || 0;
@@ -2988,6 +3006,7 @@
                     roomId = '';
                     channelId = '';
                     history.replaceState(null, '', '/');
+                    document.title = 'RustRooms';
                     document.getElementById('welcomeOverlay').style.display = 'flex';
                     document.querySelector('main').style.display = 'none';
                     document.querySelector('.taskbar').style.display = 'none';
@@ -3031,6 +3050,7 @@
                 appLayout.classList.add('flex');
                 document.getElementById('sidebarToggle').classList.remove('hidden');
                 applySidebarState(true);
+                updatePageTitle();
             }, 300);
 
             const videoTrack = localStream ? localStream.getVideoTracks()[0] : null;

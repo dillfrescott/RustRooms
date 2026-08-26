@@ -1807,6 +1807,9 @@
 
             hasLeftRoom = true;
 
+            // Reset the tab title when the call ends.
+            document.title = 'RustRooms';
+
             // Release wake lock and stop no sleep video
             if (wakeLock) {
                 try {

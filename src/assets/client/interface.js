@@ -705,8 +705,75 @@
         });
 
         document.addEventListener('keydown', function(e) {
+            const t = e.target;
+            const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+
             if (e.key === 'Escape') {
+                // Close the top-most thing: popup menu, stats window,
+                // settings, then safe modal overlays, then on-the-go mode.
+                // (Deliberately no "typing" guard: Escape inside a modal's
+                // own text field should still dismiss that modal.)
                 closeUserVolumeMenu();
+
+                const statsWindow = document.getElementById('statsWindow');
+                if (statsWindow && statsWindow.classList.contains('visible')) {
+                    toggleStatsWindow();
+                    return;
+                }
+
+                const settingsOverlay = document.getElementById('settingsOverlay');
+                if (settingsOverlay && !settingsOverlay.classList.contains('hidden')) {
+                    closeSettings();
+                    return;
+                }
+
+                const modalPairs = [
+                    ['nameModal', closeNameModal],
+                    ['passwordModal', closePasswordModal],
+                    ['confirmModal', closeCustomConfirm],
+                    ['kickModal', closeKickModal],
+                    ['cropModal', closeCropModal]
+                ];
+                for (const [id, closer] of modalPairs) {
+                    const el = document.getElementById(id);
+                    if (el && el.classList.contains('open')) {
+                        closer();
+                        return;
+                    }
+                }
+
+                const otgOverlay = document.getElementById('onTheGoOverlay');
+                if (otgOverlay && !otgOverlay.classList.contains('hidden') && typeof toggleOnTheGoMode === 'function') {
+                    toggleOnTheGoMode(false);
+                    return;
+                }
+                return;
+            }
+
+            // In-call keyboard shortcuts (M / D / C). Guarded so they never
+            // fire while typing, while a modifier is held, or outside a call.
+            if (typing || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+
+            const appLayout = document.getElementById('appLayout');
+            if (!appLayout || appLayout.classList.contains('hidden')) return;
+
+            switch (e.key.toLowerCase()) {
+                case 'm':
+                    e.preventDefault();
+                    if (typeof toggleMic === 'function') toggleMic();
+                    break;
+                case 'd':
+                    e.preventDefault();
+                    if (typeof toggleDeafen === 'function') toggleDeafen();
+                    break;
+                case 'c': {
+                    const camBtn = document.getElementById('btnCam');
+                    if (camBtn && !camBtn.disabled) {
+                        e.preventDefault();
+                        if (typeof toggleCam === 'function') toggleCam();
+                    }
+                    break;
+                }
             }
         });
 
@@ -857,6 +924,7 @@
             if (channelNameEl) {
                 channelNameEl.innerText = `# ${channelId}`;
             }
+            if (typeof updatePageTitle === 'function') updatePageTitle();
 
             const newUrl = `/${encodeURIComponent(roomId)}${channelId && channelId.toLowerCase() !== 'general' ? '/' + encodeURIComponent(channelId) : ''}`;
             if (window.location.pathname !== newUrl) {
@@ -1084,6 +1152,17 @@
 
                 container.appendChild(roomEl);
             });
+
+            // Friendly empty state for a freshly created account with no channels.
+            if (container.children.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'sidebar-empty';
+                empty.innerHTML = `
+                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    <span>No channels yet.<br>Create one to start a call.</span>
+                `;
+                container.appendChild(empty);
+            }
         }
 
         async function createRoom() {
