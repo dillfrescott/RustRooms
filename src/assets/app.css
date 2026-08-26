@@ -1891,9 +1891,6 @@
         #startActionContainer {
             animation: fadeIn 0.6s var(--ease-out) 0.12s both;
         }
-        .welcome-microcopy {
-            animation: fadeIn 0.6s var(--ease-out) 0.24s both;
-        }
 
         /* ---- Setup / settings / crop panels pop in when shown ---- */
         @keyframes panel-pop {
