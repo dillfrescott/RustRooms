@@ -1257,13 +1257,23 @@
             }, { passive: true });
         });
 
-        // Touch devices (especially iOS Safari) keep :active/:hover on a tapped
-        // button while it stays focused, so it looks pressed until the user taps
-        // elsewhere. Blur the button once the tap ends to clear that state.
-        document.addEventListener('touchend', () => {
-            const el = document.activeElement;
-            if (el && el.tagName === 'BUTTON') el.blur();
+        // Touch devices (especially iOS Safari) keep the simulated :hover/:active
+        // look stuck on the last tapped button until another element is tapped;
+        // blurring focus does not reliably clear it. Press feedback on touch is
+        // driven by a JS-managed .pressed class (see app.css) whose lifecycle is
+        // fully controlled here, so it can never get stuck.
+        document.addEventListener('touchstart', (e) => {
+            const btn = e.target.closest('.control-btn');
+            if (btn && !btn.disabled) btn.classList.add('pressed');
         }, { passive: true });
+        ['touchend', 'touchcancel'].forEach(evt => {
+            document.addEventListener(evt, () => {
+                document.querySelectorAll('.control-btn.pressed')
+                    .forEach(b => b.classList.remove('pressed'));
+                const el = document.activeElement;
+                if (el && el.tagName === 'BUTTON') el.blur();
+            }, { passive: true });
+        });
 
         async function loadDevices() {
             const btnJoin = document.getElementById('btnJoin');

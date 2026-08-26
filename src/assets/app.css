@@ -352,11 +352,24 @@ body {
     width: 26px;
     height: 26px;
 }
-.control-btn:hover {
-    background: #93B8F2;
-    border-color: #93B8F2;
+/* Touch devices (especially iOS Safari) keep the simulated :hover/:active
+ * look stuck on the last tapped button until another element is tapped, and
+ * JS cannot reliably clear it. So hover/active color changes only apply on
+ * devices that actually support hover (mouse/trackpad). On touch devices,
+ * press feedback is driven by a JS-managed .pressed class (see core.js),
+ * whose lifecycle is fully controlled so it can never get stuck. */
+@media (hover: hover) and (pointer: fine) {
+    .control-btn:hover {
+        background: #93B8F2;
+        border-color: #93B8F2;
+    }
+    .control-btn:active {
+        background: color-mix(in srgb, var(--md-primary) 82%, black);
+        border-color: color-mix(in srgb, var(--md-primary) 82%, black);
+        transform: scale(0.92);
+    }
 }
-.control-btn:active {
+.control-btn.pressed {
     background: color-mix(in srgb, var(--md-primary) 82%, black);
     border-color: color-mix(in srgb, var(--md-primary) 82%, black);
     transform: scale(0.92);
@@ -375,18 +388,22 @@ body {
     color: var(--md-on-error);
     border-color: var(--md-error);
 }
-.control-btn.active-red:hover {
-    background: var(--md-error-container);
-    border-color: var(--md-error-container);
+@media (hover: hover) and (pointer: fine) {
+    .control-btn.active-red:hover {
+        background: var(--md-error-container);
+        border-color: var(--md-error-container);
+    }
 }
 .control-btn.active-green {
     background: var(--success);
     color: #062E12;
     border-color: var(--success);
 }
-.control-btn.active-green:hover {
-    background: var(--success-hover);
-    border-color: var(--success-hover);
+@media (hover: hover) and (pointer: fine) {
+    .control-btn.active-green:hover {
+        background: var(--success-hover);
+        border-color: var(--success-hover);
+    }
 }
 
 /* ============================================================
