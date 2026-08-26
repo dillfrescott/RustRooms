@@ -220,7 +220,7 @@ pub(crate) async fn index(
         }
         (true, Some(authority)) => {
             let origin = embed_origin(&headers, &authority);
-            ("Join the call — RustRooms", call_social_meta(&origin, path))
+            ("Join the call", call_social_meta(&origin, path))
         }
         _ => ("RustRooms", String::new()),
     };

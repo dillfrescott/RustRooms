@@ -36,7 +36,7 @@
         function updatePageTitle() {
             const el = document.getElementById('currentChannelName');
             const label = el && el.innerText.trim() ? el.innerText.trim() : '';
-            document.title = label ? `${label} — RustRooms` : 'RustRooms';
+            document.title = label ? `RustRooms - ${label}` : 'RustRooms';
         }
         if (roomId) updatePageTitle();
 
