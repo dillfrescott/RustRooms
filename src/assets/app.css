@@ -271,14 +271,14 @@
                 color: #ffffff;
                 border-color: var(--danger-hover);
                 transform: none;
-                box-shadow: 0 0 14px 4px var(--danger-glow);
+                box-shadow: 0 0 14px 4px var(--danger-glow) !important;
             }
             .control-btn.active-green:hover {
                 background: var(--success-hover);
                 color: var(--bg-primary);
                 border-color: var(--success-hover);
                 transform: none;
-                box-shadow: 0 0 14px 4px var(--success-glow);
+                box-shadow: 0 0 14px 4px var(--success-glow) !important;
             }
             .control-btn:disabled:hover {
                 background: var(--bg-elevated);
@@ -306,14 +306,14 @@
             background: var(--danger);
             color: #ffffff;
             border-color: var(--danger);
-            box-shadow: 0 0 10px 3px var(--danger-glow);
+            box-shadow: 0 0 10px 3px var(--danger-glow) !important;
         }
 
         .control-btn.active-green {
             background: var(--success);
             color: var(--bg-primary);
             border-color: var(--success);
-            box-shadow: 0 0 10px 3px var(--success-glow);
+            box-shadow: 0 0 10px 3px var(--success-glow) !important;
         }
 
         .control-btn.active-green:active {
@@ -797,6 +797,13 @@
             gap: 10px;
         }
 
+        /* On-the-go Leave Call button asks for a red shadow (shadow-red-600/20)
+         * which the global button-shadow kill would otherwise neutralise.
+         * Give it the same danger glow as the taskbar leave button. */
+        #onTheGoOverlay button.bg-red-600 {
+            box-shadow: 0 0 18px 2px var(--danger-glow) !important;
+        }
+
         .mic-meter {
             width: 100%;
             height: 3px;
@@ -889,7 +896,7 @@
             border: 1px solid var(--accent);
             transition: all 0.15s ease;
             border-radius: var(--radius-md);
-            box-shadow: 0 0 6px 2px var(--accent-glow);
+            box-shadow: 0 0 6px 2px var(--accent-glow) !important;
             text-transform: uppercase;
             font-size: 11px;
             letter-spacing: 0.08em;
@@ -915,21 +922,21 @@
                 color: #ffffff;
                 border-color: var(--accent-hover);
                 transform: none;
-                box-shadow: 0 0 14px 4px var(--accent-glow);
+                box-shadow: 0 0 14px 4px var(--accent-glow) !important;
                 filter: brightness(1.12) saturate(1.1);
             }
 
             .btn-primary.btn-danger:hover {
                 background: var(--danger-hover);
                 border-color: var(--danger-hover);
-                box-shadow: 0 0 14px 4px var(--danger-glow);
+                box-shadow: 0 0 14px 4px var(--danger-glow) !important;
             }
         }
 
         .btn-primary.btn-danger {
             background: var(--danger);
             border-color: var(--danger);
-            box-shadow: 0 0 6px 2px var(--danger-glow);
+            box-shadow: 0 0 6px 2px var(--danger-glow) !important;
         }
 
         .btn-primary:active {
@@ -1009,7 +1016,7 @@
             background: var(--danger);
             color: #ffffff;
             border-color: var(--danger);
-            box-shadow: 0 0 10px 3px var(--danger-glow);
+            box-shadow: 0 0 10px 3px var(--danger-glow) !important;
         }
 
         .btn-secondary.active-red:focus-visible {
@@ -1048,7 +1055,7 @@
                 color: #ffffff;
                 border-color: var(--danger-hover);
                 transform: none;
-                box-shadow: 0 0 14px 4px var(--danger-glow);
+                box-shadow: 0 0 14px 4px var(--danger-glow) !important;
             }
         }
 
@@ -1845,6 +1852,86 @@
         }
         #globeCanvas:active {
             cursor: grabbing;
+        }
+
+        /* ============================================================
+         * Home screen depth: faint ink aurora + glow behind the globe
+         * ============================================================ */
+        #welcomeOverlay::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(85% 65% at 78% 52%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 68%),
+                radial-gradient(55% 45% at 18% 26%, color-mix(in srgb, var(--accent-blue) 6%, transparent), transparent 72%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ---- Hero title: slow living shimmer over the white gradient ---- */
+        .hero-title {
+            background-image: linear-gradient(115deg,
+                #ffffff 0%,
+                #f4f4f7 26%,
+                color-mix(in srgb, var(--accent-blue) 30%, #ffffff) 50%,
+                #f4f4f7 74%,
+                #ffffff 100%) !important;
+            background-size: 220% auto;
+            animation: hero-shimmer 9s ease-in-out infinite;
+        }
+        @keyframes hero-shimmer {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        /* ---- Welcome content staggers in on load ---- */
+        #welcomeTitleContainer {
+            animation: fadeIn 0.6s var(--ease-out) both;
+        }
+        #startActionContainer {
+            animation: fadeIn 0.6s var(--ease-out) 0.12s both;
+        }
+        .welcome-microcopy {
+            animation: fadeIn 0.6s var(--ease-out) 0.24s both;
+        }
+
+        /* ---- Setup / settings / crop panels pop in when shown ---- */
+        @keyframes panel-pop {
+            from { opacity: 0; transform: translateY(14px) scale(0.985); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        #configPanel,
+        #settingsOverlay > .glass-panel,
+        #cropModal > .glass-panel {
+            animation: panel-pop 0.4s var(--ease-out) both;
+        }
+
+        /* ---- Missing helpers used by the UI ---- */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: var(--border-strong);
+            border-radius: var(--radius-sm);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+
+        .channel-timer {
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.02em;
+        }
+
+        /* accent-colored text caret in every input */
+        input[type="text"],
+        input[type="password"],
+        textarea {
+            caret-color: var(--accent);
         }
 
         /* ============================================================

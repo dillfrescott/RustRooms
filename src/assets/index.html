@@ -105,13 +105,14 @@
         <canvas id="globeCanvas"></canvas>
         <div class="text-center space-y-8 max-w-md w-full relative z-10">
             <div class="space-y-4" id="welcomeTitleContainer">
-                <h1 class="text-5xl md:text-7xl font-bold tracking-tight" style="color: #ffffff; font-weight: 800; letter-spacing: -0.05em; background: linear-gradient(135deg, #ffffff 0%, #f4f4f7 50%, #ffffff 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Rust Rooms</h1>
+                <h1 class="hero-title text-5xl md:text-7xl font-bold tracking-tight" style="color: #ffffff; font-weight: 800; letter-spacing: -0.05em; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Rust Rooms</h1>
                 <p style="color: var(--text-secondary);" class="text-base md:text-lg font-normal opacity-60">Simple, secure, and fast video conferencing.</p>
             </div>
 
             <div id="startActionContainer" class="relative min-h-[72px] flex justify-center items-center">
-                 <button id="btnStartRoom" onclick="createRoom()" class="btn-primary absolute w-full md:w-auto px-12 py-4 rounded-2xl font-semibold text-lg transition-all">
+                 <button id="btnStartRoom" onclick="createRoom()" class="btn-primary group absolute w-full md:w-auto px-12 py-4 rounded-2xl font-semibold text-lg transition-all">
                     Start Room
+                    <svg class="inline-block ml-2 w-5 h-5 transition-transform duration-200 group-hover:translate-x-1" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
                 </button>
 
                 <div id="passwordInputContainer" class="absolute w-full max-w-xs transition-all duration-300 transform translate-y-4 opacity-0 pointer-events-none flex gap-2">
@@ -121,6 +122,8 @@
                      </button>
                 </div>
             </div>
+
+            <p class="welcome-microcopy text-xs md:text-sm" style="color: var(--text-muted); opacity: 0.65;">No downloads · No account needed — just open the link and talk.</p>
         </div>
     </div>
 
