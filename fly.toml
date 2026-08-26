@@ -1,0 +1,15 @@
+app = 'dill-rustrooms'
+primary_region = 'ord'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
