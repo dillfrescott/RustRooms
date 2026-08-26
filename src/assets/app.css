@@ -683,35 +683,44 @@
             }
         }
 
-        @keyframes vad-glow-pulse {
-            0%, 100% {
+        /* Solid VAD bar: no diffused glow, no layout shift. A crisp 3px
+         * ring (0 blur) plus the base border's color both slowly cycle the
+         * accent palette while someone speaks. The ring is a box-shadow,
+         * which never changes the element's size, so avatars and
+         * camera/screen tiles do not resize when the bar appears. */
+        @keyframes vad-color-cycle {
+            0% {
                 border-color: var(--accent);
-                box-shadow: 0 0 10px 1px var(--accent-glow),
-                    inset 0 0 14px 0 var(--accent-glow);
+                box-shadow: 0 0 0 var(--vad-ring-width, 3px) var(--accent);
+            }
+            25% {
+                border-color: var(--accent-blue);
+                box-shadow: 0 0 0 var(--vad-ring-width, 3px) var(--accent-blue);
             }
             50% {
-                border-color: var(--accent-blue);
-                box-shadow: 0 0 26px 5px var(--accent-glow),
-                    inset 0 0 22px 0 var(--accent-glow);
+                border-color: var(--accent-green);
+                box-shadow: 0 0 0 var(--vad-ring-width, 3px) var(--accent-green);
+            }
+            75% {
+                border-color: var(--accent-yellow);
+                box-shadow: 0 0 0 var(--vad-ring-width, 3px) var(--accent-yellow);
+            }
+            100% {
+                border-color: var(--accent);
+                box-shadow: 0 0 0 var(--vad-ring-width, 3px) var(--accent);
             }
         }
 
         .speaking-glow {
-            border: 3px solid var(--accent);
-            animation: vad-glow-pulse 1.8s ease-in-out infinite;
+            animation: vad-color-cycle 6s linear infinite;
             transition: all 0.15s ease;
             z-index: 50;
         }
 
-        /* The empty-avatar rule has greater specificity than .speaking-glow.
-         * Override it explicitly so Safari still paints the VAD border when
-         * there is no image. */
-        .avatar-center.avatar-empty.speaking-glow {
-            border: 3px solid var(--accent);
-        }
-
+        /* Compact elements get a thinner ring; the ring width is a CSS
+         * variable so the shared keyframes still animate the color. */
         #localPipWrapper.speaking-glow {
-            border: 2px solid var(--accent);
+            --vad-ring-width: 2px;
             z-index: 75;
         }
 
@@ -1358,8 +1367,7 @@
         }
 
         .mini-avatar.speaking-glow {
-            border: 2px solid var(--accent);
-            box-shadow: none !important;
+            --vad-ring-width: 2px;
             transition: all 0.15s ease;
         }
 
