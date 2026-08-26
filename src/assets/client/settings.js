@@ -424,6 +424,28 @@
         let cropGifOverlay = null;
         let cropGifOverlaySeq = 0;
 
+        // Croppie measures the viewport/boundary (via getBoundingClientRect)
+        // once, at bind time, and derives the min zoom and centering from
+        // that. The crop panel pops in with a scale(0.97)->scale(1)
+        // animation, and getBoundingClientRect includes ancestor transforms,
+        // so binding mid-pop measures a shrunken viewport: the zoomed-out
+        // image then never fills the square and sits off-center. Wait for the
+        // pop to finish before binding (a spinner shows meanwhile).
+        const CROP_POP_TIMEOUT_MS = 500;
+        let cropBindSeq = 0;
+        function waitForCropPanelPop(panel) {
+            return new Promise(resolve => {
+                let settled = false;
+                const finish = () => { if (!settled) { settled = true; resolve(); } };
+                const anims = (panel.getAnimations ? panel.getAnimations() : [])
+                    .filter(a => a.animationName === 'panel-pop');
+                if (!anims.length) { finish(); return; }
+                const failSafe = setTimeout(finish, CROP_POP_TIMEOUT_MS);
+                Promise.all(anims.map(a => a.finished.catch(() => {})))
+                    .then(() => { clearTimeout(failSafe); finish(); });
+            });
+        }
+
         function openCropModal(imageUrl, target, gifDataUrl) {
             currentCropTarget = target;
             currentCropIsGif = !!gifDataUrl;
@@ -433,29 +455,40 @@
             const wrapper = document.getElementById('cropWrapper');
             wrapper.innerHTML = '';
             showOverlayAnimated(modal);
-
-            currentCroppie = new Croppie(wrapper, {
-                viewport: { width: 200, height: 200, type: 'square' },
-                boundary: { width: '100%', height: 250 },
-                showZoomer: true,
-                // GIFs have no EXIF orientation to honor; keep the plain
-                // <img> preview so the looping overlay below can mirror it.
-                enableOrientation: !currentCropIsGif
-            });
-            currentCroppie.bind({ url: imageUrl, zoom: 0 }).then(() => {
-                // Guard against a stale bind resolving after the modal was
-                // closed or reopened with a different image.
-                if (currentCropIsGif && currentCropGifDataUrl === gifDataUrl) {
-                    loopGifInCroppie(currentCropGifDataUrl);
-                }
-            }).catch(err => {
-                console.error("Crop preview failed:", err);
-                closeCropModal();
-                showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+            const panel = modal.querySelector('.glass-panel');
+            const seq = ++cropBindSeq;
+            wrapper.innerHTML = '<div class="flex items-center justify-center" style="height:250px;">' +
+                '<svg class="spinner" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent);"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>' +
+                '</div>';
+            waitForCropPanelPop(panel).then(() => {
+                // Guard against the modal being closed or reopened while we
+                // waited for the pop animation to finish.
+                if (seq !== cropBindSeq) return;
+                wrapper.innerHTML = '';
+                currentCroppie = new Croppie(wrapper, {
+                    viewport: { width: 200, height: 200, type: 'square' },
+                    boundary: { width: '100%', height: 250 },
+                    showZoomer: true,
+                    // GIFs have no EXIF orientation to honor; keep the plain
+                    // <img> preview so the looping overlay below can mirror it.
+                    enableOrientation: !currentCropIsGif
+                });
+                currentCroppie.bind({ url: imageUrl, zoom: 0 }).then(() => {
+                    // Guard against a stale bind resolving after the modal was
+                    // closed or reopened with a different image.
+                    if (currentCropIsGif && currentCropGifDataUrl === gifDataUrl) {
+                        loopGifInCroppie(currentCropGifDataUrl);
+                    }
+                }).catch(err => {
+                    console.error("Crop preview failed:", err);
+                    closeCropModal();
+                    showCustomAlert("Image Error", "Could not process this image. Please try a different file.");
+                });
             });
         }
 
         function closeCropModal() {
+            cropBindSeq++; // cancel any pending delayed bind
             hideOverlayAnimated(document.getElementById('cropModal'));
             if (currentCroppie) {
                 currentCroppie.destroy();

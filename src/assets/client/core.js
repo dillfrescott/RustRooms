@@ -2332,7 +2332,10 @@
             });
         }
 
-        const canUseGifAnimator = () => typeof ImageDecoder !== 'undefined' && globalThis.createGifAnimator;
+        // The JS frame animator works everywhere (built-in GIF decoder;
+        // ImageDecoder was removed from Chrome 130+), so the canvas-based
+        // animation path is always available.
+        const canUseGifAnimator = () => typeof globalThis.createGifAnimator === 'function';
 
         // Loops a GIF inside an <img> preview (setup/settings screens) via
         // the JS frame animator, so the animation plays even in browsers

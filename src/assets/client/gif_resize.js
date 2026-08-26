@@ -181,17 +181,26 @@
         return bytes;
     }
 
-    // Decodes every frame of a GIF via WebCodecs ImageDecoder (Chrome) into
-    // canvases (maxDim-capped) plus their GCE delays. Works with zero
-    // dependence on browser GIF playback. Returns null where ImageDecoder
-    // is unavailable.
+    // Decodes every frame of a GIF into canvases (maxDim-capped) plus their
+    // GCE delays in ms. Prefers WebCodecs ImageDecoder where it still exists
+    // (Chrome < 130); everywhere else a built-in GIF87a/89a parser + LZW
+    // decoder is used, so GIF capture, crop and previews keep working with
+    // zero dependence on browser GIF playback.
     async function decodeGifFrames(dataUrl, maxDim) {
-        if (typeof ImageDecoder === 'undefined') {
-            return null;
+        if (typeof ImageDecoder !== 'undefined') {
+            try {
+                if (await ImageDecoder.isTypeSupported('image/gif')) {
+                    return await decodeGifFramesWithImageDecoder(dataUrl, maxDim);
+                }
+            } catch (err) {
+                console.warn('ImageDecoder GIF decode failed, using built-in decoder:', err);
+            }
         }
-        if (!(await ImageDecoder.isTypeSupported('image/gif'))) {
-            return null;
-        }
+        return decodeGifFramesBuiltIn(dataUrl, maxDim);
+    }
+
+    // WebCodecs ImageDecoder path (Chrome < 130 only).
+    async function decodeGifFramesWithImageDecoder(dataUrl, maxDim) {
         const decoder = new ImageDecoder({ data: dataUrlToBytes(dataUrl), type: 'image/gif' });
         try {
             await decoder.tracks.ready;
@@ -257,6 +266,323 @@
         }
     }
 
+    // Built-in GIF parser. WebCodecs ImageDecoder was removed from Chrome
+    // 130+ and never shipped in Firefox/Safari, so GIFs are parsed here
+    // instead: GCT/LCT palettes, interlace, transparency, disposal methods
+    // and GCE delays, composited frame-by-frame.
+    function decodeGifFramesBuiltIn(dataUrl, maxDim) {
+        return decodeGifBytes(dataUrlToBytes(dataUrl), maxDim);
+    }
+
+    async function decodeGifBytes(bytes, maxDim) {
+        if (bytes.length < 13) {
+            throw new Error('Invalid GIF: too short');
+        }
+        const signature = String.fromCharCode(bytes[0], bytes[1], bytes[2]);
+        const version = String.fromCharCode(bytes[3], bytes[4], bytes[5]);
+        if (signature !== 'GIF' || (version !== '87a' && version !== '89a')) {
+            throw new Error('Invalid GIF: bad header');
+        }
+        let pos = 6;
+        const logicalWidth = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+        const logicalHeight = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+        if (!logicalWidth || !logicalHeight) {
+            throw new Error('Invalid GIF: zero dimensions');
+        }
+        const packed = bytes[pos++];
+        const bgColorIndex = bytes[pos++];
+        pos++; // pixel aspect ratio
+        let palette = null;
+        if (packed & 0x80) {
+            palette = [];
+            const size = 2 << (packed & 0x07);
+            for (let i = 0; i < size; i++) {
+                palette.push([bytes[pos], bytes[pos + 1], bytes[pos + 2]]);
+                pos += 3;
+            }
+        }
+
+        const dim = maxDim || GIF_MAX_CAPTURE_DIM;
+        const scale = Math.min(dim / logicalWidth, dim / logicalHeight, 1);
+        const width = Math.max(1, Math.round(logicalWidth * scale));
+        const height = Math.max(1, Math.round(logicalHeight * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        const frames = [];
+        let pendingGce = null;
+        let prevDisposal = 0;
+        let prevRect = null;
+        let prevCopy = null;
+
+        while (pos < bytes.length) {
+            const blockType = bytes[pos++];
+            if (blockType === 0x3b) break; // trailer
+            if (blockType === 0x21) {
+                const label = bytes[pos++];
+                if (label === 0xf9) {
+                    // Graphic Control Extension
+                    pos++; // block size (4)
+                    const flags = bytes[pos++];
+                    const delayUnits = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+                    const transparentIndex = bytes[pos++];
+                    pos++; // block terminator
+                    pendingGce = {
+                        transparency: (flags & 0x01) !== 0,
+                        transparentIndex,
+                        disposal: (flags & 0x1c) >> 2,
+                        // 0 = unspecified; browsers treat it as ~100ms.
+                        delay: (delayUnits === 0 ? 100 : delayUnits * 10),
+                    };
+                } else if (label === 0xff) {
+                    // Application extension (NETSCAPE loop count is not needed
+                    // here - every frame is emitted once).
+                    pos = skipGifSubBlocks(bytes, pos);
+                } else {
+                    // Comment / plain text / unknown extension.
+                    pos = skipGifSubBlocks(bytes, pos);
+                }
+            } else if (blockType === 0x2c) {
+                // Image Descriptor
+                const left = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+                const top = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+                const frameWidth = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+                const frameHeight = bytes[pos] | (bytes[pos + 1] << 8); pos += 2;
+                const imgPacked = bytes[pos++];
+                let framePalette = palette;
+                if (imgPacked & 0x80) {
+                    framePalette = [];
+                    const size = 2 << (imgPacked & 0x07);
+                    for (let i = 0; i < size; i++) {
+                        framePalette.push([bytes[pos], bytes[pos + 1], bytes[pos + 2]]);
+                        pos += 3;
+                    }
+                }
+                if (!framePalette) {
+                    throw new Error('Invalid GIF: no color table');
+                }
+                const interlace = (imgPacked & 0x40) !== 0;
+                const minCodeSize = bytes[pos++];
+                const lzwBlocks = [];
+                while (pos < bytes.length) {
+                    const size = bytes[pos++];
+                    if (size === 0) break;
+                    if (pos + size > bytes.length) break;
+                    lzwBlocks.push(bytes.subarray(pos, pos + size));
+                    pos += size;
+                }
+                const indices = lzwDecode(lzwBlocks, minCodeSize, frameWidth * frameHeight);
+                const gce = pendingGce || { transparency: false, transparentIndex: 0, disposal: 0, delay: 100 };
+                pendingGce = null;
+
+                // Apply the previous frame's disposal before drawing this one.
+                if (prevDisposal === 2 && prevRect) {
+                    ctx.clearRect(prevRect.x, prevRect.y, prevRect.w, prevRect.h);
+                } else if (prevDisposal === 3 && prevCopy) {
+                    ctx.drawImage(prevCopy, 0, 0);
+                }
+                if (gce.disposal === 3) {
+                    prevCopy = document.createElement('canvas');
+                    prevCopy.width = width;
+                    prevCopy.height = height;
+                    prevCopy.getContext('2d').drawImage(canvas, 0, 0);
+                } else {
+                    prevCopy = null;
+                }
+
+                drawGifFrame(ctx, framePalette, indices, left, top, frameWidth, frameHeight, interlace, gce, scale);
+
+                prevDisposal = gce.disposal;
+                prevRect = {
+                    x: Math.round(left * scale),
+                    y: Math.round(top * scale),
+                    w: Math.max(1, Math.round(frameWidth * scale)),
+                    h: Math.max(1, Math.round(frameHeight * scale)),
+                };
+
+                const frameCanvas = document.createElement('canvas');
+                frameCanvas.width = width;
+                frameCanvas.height = height;
+                frameCanvas.getContext('2d').drawImage(canvas, 0, 0);
+                frames.push({ canvas: frameCanvas, delay: gce.delay });
+                await yieldToEventLoop();
+            } else {
+                throw new Error('Invalid GIF: unexpected block 0x' + blockType.toString(16));
+            }
+        }
+        if (frames.length === 0) {
+            throw new Error('No frames captured');
+        }
+        return { frames, width, height };
+    }
+
+    function skipGifSubBlocks(bytes, pos) {
+        while (pos < bytes.length) {
+            const size = bytes[pos++];
+            if (size === 0) return pos;
+            pos += size;
+        }
+        return pos;
+    }
+
+    // GIF LZW decompression: LSB-first codes, 2-12 bit code width, clear/end
+    // codes and the "KWI" (code == nextCode) case. Returns a Uint8Array of
+    // exactly expectedPixels (padded with 0 if the stream is truncated).
+    function lzwDecode(blocks, minCodeSize, expectedPixels) {
+        if (minCodeSize < 2 || minCodeSize > 8) {
+            throw new Error('Invalid GIF: bad LZW min code size');
+        }
+        const clearCode = 1 << minCodeSize;
+        const endCode = clearCode + 1;
+        const out = new Uint8Array(expectedPixels);
+        const dict = new Array(4096);
+        for (let i = 0; i < clearCode; i++) {
+            dict[i] = { prefix: -1, suffix: i, first: i };
+        }
+        let codeSize = minCodeSize + 1;
+        let nextCode = endCode + 1;
+        let prev = -1;
+        let bitBuffer = 0;
+        let bitCount = 0;
+        let written = 0;
+        let done = false;
+        const scratch = new Array(4096);
+        const writeChain = (code, extra) => {
+            let len = 0;
+            let cur = code;
+            while (cur >= 0 && len < scratch.length) {
+                scratch[len++] = dict[cur].suffix;
+                cur = dict[cur].prefix;
+            }
+            for (let i = len - 1; i >= 0 && written < expectedPixels; i--) {
+                out[written++] = scratch[i];
+            }
+            if (extra >= 0 && written < expectedPixels) {
+                out[written++] = extra;
+            }
+        };
+        for (let b = 0; b < blocks.length && !done; b++) {
+            const block = blocks[b];
+            for (let i = 0; i < block.length && !done; i++) {
+                bitBuffer |= block[i] << bitCount;
+                bitCount += 8;
+                while (bitCount >= codeSize && !done) {
+                    const code = bitBuffer & ((1 << codeSize) - 1);
+                    bitBuffer >>>= codeSize;
+                    bitCount -= codeSize;
+                    if (code === clearCode) {
+                        codeSize = minCodeSize + 1;
+                        nextCode = endCode + 1;
+                        prev = -1;
+                    } else if (code === endCode) {
+                        done = true;
+                    } else if (prev === -1) {
+                        // First code after a clear: single dictionary entry.
+                        writeChain(code, -1);
+                        prev = code;
+                    } else {
+                        if (code < nextCode) {
+                            writeChain(code, -1);
+                            dict[nextCode] = { prefix: prev, suffix: dict[code].first, first: dict[prev].first };
+                        } else if (code === nextCode) {
+                            // KWI case: sequence of prev + its first byte.
+                            writeChain(prev, dict[prev].first);
+                            dict[nextCode] = { prefix: prev, suffix: dict[prev].first, first: dict[prev].first };
+                        } else {
+                            throw new Error('Invalid GIF: bad LZW code');
+                        }
+                        nextCode++;
+                        if (nextCode === (1 << codeSize) && codeSize < 12) {
+                            codeSize++;
+                        }
+                        prev = code;
+                    }
+                    if (written >= expectedPixels) done = true;
+                }
+            }
+        }
+        return out;
+    }
+
+    function interlaceRowMap(fh) {
+        // maps image row -> data row: the LZW data stores rows in pass order
+        // (0,8,16,... then 4,12,... then 2,6,10,... then 1,3,5,...).
+        const map = new Uint16Array(fh);
+        let row = 0;
+        const assign = (i) => { map[i] = row++; };
+        for (let i = 0; i < fh; i += 8) assign(i);
+        for (let i = 4; i < fh; i += 8) assign(i);
+        for (let i = 2; i < fh; i += 4) assign(i);
+        for (let i = 1; i < fh; i += 2) assign(i);
+        return map;
+    }
+
+    // Composites one GIF frame (palette indices, possibly interlaced, with
+    // GCE transparency) onto the shared canvas, scaled to the capture dim.
+    function drawGifFrame(ctx, palette, indices, left, top, fw, fh, interlace, gce, scale) {
+        const sx = Math.round(left * scale);
+        const sy = Math.round(top * scale);
+        const sw = Math.max(1, Math.round(fw * scale));
+        const sh = Math.max(1, Math.round(fh * scale));
+        const transIdx = gce.transparency ? gce.transparentIndex : -1;
+        const rowMap = interlace ? interlaceRowMap(fh) : null;
+        const srcRow = (y) => (rowMap ? rowMap[y] : y);
+
+        if (fw * fh <= 4 * 1024 * 1024) {
+            // Full-resolution temp canvas, then drawImage for smooth scaling.
+            const temp = document.createElement('canvas');
+            temp.width = fw;
+            temp.height = fh;
+            const tctx = temp.getContext('2d');
+            const imgData = tctx.createImageData(fw, fh);
+            const data = imgData.data;
+            for (let y = 0; y < fh; y++) {
+                const rowBase = srcRow(y) * fw;
+                for (let x = 0; x < fw; x++) {
+                    const idx = indices[rowBase + x];
+                    const o = (y * fw + x) * 4;
+                    if (idx === transIdx || idx === undefined) {
+                        data[o + 3] = 0;
+                    } else {
+                        const c = palette[idx] || palette[0];
+                        data[o] = c[0];
+                        data[o + 1] = c[1];
+                        data[o + 2] = c[2];
+                        data[o + 3] = 255;
+                    }
+                }
+            }
+            tctx.putImageData(imgData, 0, 0);
+            ctx.drawImage(temp, sx, sy, sw, sh);
+        } else {
+            // Very large frame: sample directly into the scaled rect so the
+            // temp canvas can't balloon into hundreds of MB.
+            const img = ctx.createImageData(sw, sh);
+            const data = img.data;
+            for (let y = 0; y < sh; y++) {
+                const srcY = Math.min(fh - 1, Math.floor(y / scale));
+                const rowBase = srcRow(srcY) * fw;
+                for (let x = 0; x < sw; x++) {
+                    const srcX = Math.min(fw - 1, Math.floor(x / scale));
+                    const idx = indices[rowBase + srcX];
+                    const o = (y * sw + x) * 4;
+                    if (idx === transIdx || idx === undefined) {
+                        data[o + 3] = 0;
+                    } else {
+                        const c = palette[idx] || palette[0];
+                        data[o] = c[0];
+                        data[o + 1] = c[1];
+                        data[o + 2] = c[2];
+                        data[o + 3] = 255;
+                    }
+                }
+            }
+            ctx.putImageData(img, sx, sy);
+        }
+    }
+
     // Deterministic capture via WebCodecs ImageDecoder (Chrome): decodes
     // every GIF frame on demand with its exact GCE delay, independent of
     // browser GIF playback. Falls back to canvas capture elsewhere.
@@ -290,17 +616,15 @@
         return { frames, width: decoded.width, height: decoded.height, hasAlpha };
     }
 
+    // Deterministic frame capture via the built-in GIF decoder (or
+    // ImageDecoder where available): decodes every frame with its exact GCE
+    // delay, independent of browser GIF playback. Falls back to canvas
+    // capture on any decoder failure.
     async function captureGifFrames(dataUrl, maxDim) {
-        if (typeof ImageDecoder !== 'undefined') {
-            try {
-                if (await ImageDecoder.isTypeSupported('image/gif')) {
-                    return await captureGifFramesWithDecoder(dataUrl, maxDim);
-                }
-            } catch (err) {
-                // Fall back to canvas capture on any decoder failure, but
-                // surface it so issues are visible in the console.
-                console.warn('GIF decoder capture failed, using canvas capture:', err);
-            }
+        try {
+            return await captureGifFramesWithDecoder(dataUrl, maxDim);
+        } catch (err) {
+            console.warn('GIF frame decode failed, using canvas capture:', err);
         }
         return captureGifFramesRaf(dataUrl, maxDim);
     }
@@ -506,15 +830,23 @@
         return { avatar: jpeg, staticFrame, isGif: false };
     }
 
-    // JS-driven GIF player for the speaking animation. Some browsers
-    // (enterprise AnimationPolicy, extensions) never advance GIF frames in
-    // <img> elements; stepping pre-decoded frames with a timer still works
-    // there. Returns null when ImageDecoder is unavailable (browsers that
-    // animate GIFs natively keep using the plain <img> src swap).
+    // JS-driven GIF player for the speaking animation and avatar/crop
+    // previews. Some browsers (enterprise AnimationPolicy, extensions) never
+    // advance GIF frames in <img> elements; stepping pre-decoded frames with
+    // a timer still works there. Frames come from the built-in GIF decoder
+    // (or ImageDecoder where available). Returns null when decoding fails or
+    // the GIF has fewer than two frames (static GIFs keep using the plain
+    // <img> src swap).
     // maxDim caps the frame capture size (larger = sharper previews when the
     // GIF is displayed larger than GIF_MAX_CAPTURE_DIM).
     async function createGifAnimator(dataUrl, maxDim) {
-        const decoded = await decodeGifFrames(dataUrl, maxDim || GIF_MAX_CAPTURE_DIM);
+        let decoded;
+        try {
+            decoded = await decodeGifFrames(dataUrl, maxDim || GIF_MAX_CAPTURE_DIM);
+        } catch (err) {
+            console.warn('GIF decode failed:', err);
+            return null;
+        }
         if (!decoded || decoded.frames.length < 2) {
             return null;
         }
@@ -583,8 +915,9 @@
     globalThis.createGifAnimator = createGifAnimator;
     globalThis.readAvatarFile = readFileAsDataUrl;
     globalThis.cropGifAvatar = cropGifDataUrl;
-    // Test hooks (used by the diagnostic page).
+    // Test hooks (used by the diagnostic page / node verification).
     globalThis.__captureGifFramesWithDecoder = captureGifFramesWithDecoder;
+    globalThis.__decodeGifBytes = decodeGifBytes;
     // Test hooks (used by the node-based verification script).
     globalThis.__avatarTools = {
         encodeGifFrames,
